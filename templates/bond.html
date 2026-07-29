@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ bond.bond_name or code }} ({{ code }}) 历史下修记录 - 可转债持有人信息</title>
+<meta name="description" content="{{ bond.bond_name or code }} 的历史下修记录：下修次数、历次下修的股东大会日、下修前后转股价、生效日与下修底价，以及最新一期十大持有人。">
+<meta name="keywords" content="{{ bond.bond_name or '' }},{{ code }},历史下修,下修次数,下修提议,可转债">
+<link rel="stylesheet" href="/static/style.css?v=8">
+<style>
+  /* 非今日数据提示 + 更新按钮 */
+  .update-bar { display:flex; align-items:center; gap:12px; margin:14px 0 4px;
+    background:#fff7e6; border:1px solid #ffe0a3; border-radius:12px; padding:10px 16px; }
+  .update-bar .upd-info { color:#a16207; font-size:13.5px; }
+  .update-bar .update-btn { margin-left:auto; border:1px solid #ffd591; background:#fff;
+    color:#a16207; border-radius:18px; padding:7px 16px; font-size:13.5px; cursor:pointer; font-weight:600; transition:.15s; }
+  .update-bar .update-btn:hover { background:#fff7e6; }
+  .update-bar .update-btn:disabled { opacity:.6; cursor:default; }
+</style>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {"@type": "ListItem", "position": 1, "name": "首页", "item": "{{ url_for('index', _external=True) }}"},
+    {"@type": "ListItem", "position": 2, "name": "{{ bond.bond_name or code }}", "item": "{{ url_for('bond_detail', code=code, _external=True) }}"}
+  ]
+}
+</script>
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <a class="brand" href="/">可转债持有人信息</a>
+    <nav>
+      <a href="/">首页</a>
+      <a href="{{ url_for('persons') }}">牛散榜</a>
+      <a href="/admin">管理后台</a>
+    </nav>
+  </header>
+
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">
+      <svg class="home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      首页
+    </a>
+    <a href="/">转债查询</a>
+    <span class="current">{{ bond.bond_name or code }} ({{ code }})</span>
+  </nav>
+
+  <div class="bond-head">
+    <h2>{{ bond.bond_name or '未知转债' }} <span class="code">{{ code }}</span></h2>
+    <p class="sub">正股：{{ bond.stock_name or '-' }}（{{ bond.stock_code or '-' }}）· 评级：{{ bond.rating or '-' }} · 数据来源：{{ bond.data_source or '东方财富' }}</p>
+  </div>
+
+  <div class="update-bar" id="updateBar" style="display:none">
+    <span class="upd-info" id="updInfo"></span>
+    <button class="update-btn" id="updateBtn" onclick="refreshBond()">🔄 更新数据</button>
+  </div>
+
+  <div class="info-cards">
+    <div class="info"><div class="num">{{ '%.2f'|format(bond.current_price) if bond.current_price else '-' }}</div><div class="label">现价(元)</div></div>
+    <div class="info"><div class="num">{{ bond.current_transfer_price or '-' }}</div><div class="label">转股价(元)</div></div>
+    <div class="info"><div class="num">{{ bond.issue_scale or '-' }}</div><div class="label">发行规模(亿)</div></div>
+    <div class="info"><div class="num">{{ bond.listing_date or '-' }}</div><div class="label">上市日</div></div>
+    <div class="info"><div class="num">{{ bond.expire_date or '-' }}</div><div class="label">到期日</div></div>
+  </div>
+
+  <div class="stat-cards">
+    <div class="stat"><div class="num red">{{ down_count or 0 }}</div><div class="label">历史下修次数</div></div>
+    <div class="stat"><div class="num">{{ latest_down_revise.meeting_date if latest_down_revise else '暂无' }}</div><div class="label">最近下修提议(股东大会)</div></div>
+    <div class="stat"><div class="num small">{{ dr_updated or '本次实时采集' }}</div><div class="label">下修数据采集时间</div></div>
+  </div>
+
+  <section class="panel">
+    <div class="section-head">
+      <h3>📉 历史下修记录</h3>
+      <span class="hint">数据来源：集思录「转股价格调整记录」（下修前/后转股价、下修底价）</span>
+    </div>
+    <div class="table-wrap">
+      {% if down_count and down_count > 0 %}
+      <p class="xiuxie-lead">{{ bond.bond_name }} 历史共发生 <b>{{ down_count }}</b> 次下修，最近一次下修提议于 <b>{{ latest_down_revise.meeting_date }}</b>。完整明细见专题页：</p>
+      {% else %}
+      <p class="empty">该转债历史上未发生下修（集思录无下修记录）。</p>
+      {% endif %}
+      <a class="xiuxie-link" href="{{ url_for('xiuxie_detail', code=code) }}">📉 查看完整历史下修记录 →</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <h3>📋 最新一期十大持有人{% if latest_period %}（{{ latest_period }}）{% endif %}</h3>
+      <span class="hint">数据来源：东方财富数据中心；自然人可点击查看其全部持仓</span>
+    </div>
+    <div class="table-wrap">
+      {% if holders %}
+      <table class="rank">
+        <thead><tr><th>排名</th><th>持有人</th><th>性质</th><th>持有量(万张)</th><th>比例</th></tr></thead>
+        <tbody>
+        {% for h in holders %}
+          {% set ncls = {'基金':'fund','个人':'natural','一般机构':'org'}.get(h.holder_nature, 'unknown') %}
+          <tr class="{% if h.is_natural %}natural{% endif %}">
+            <td>{{ h.rank }}</td>
+            <td>{% if h.is_natural %}<a class="nm" href="{{ url_for('person', name=h.holder_name) }}">{{ h.holder_name }}</a>{% else %}{{ h.holder_name }}{% endif %}</td>
+            <td><span class="nature-tag {{ ncls }}">{{ h.holder_nature or '未知' }}</span></td>
+            <td>{{ h.hold_amount }}</td>
+            <td>{{ h.hold_ratio }}%</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">暂无持有人数据采集（可在管理后台更新）。</p>
+      {% endif %}
+    </div>
+  </section>
+</div>
+<script>
+  // 更新时间非今日（北京时间）则显示更新按钮
+  (function(){
+    var upd = "{{ bond.updated_at or '' }}";
+    var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    var bar = document.getElementById('updateBar');
+    var info = document.getElementById('updInfo');
+    if(!upd || upd.slice(0, 10) !== today){
+      bar.style.display = 'flex';
+      info.textContent = upd ? ('数据更新于 ' + upd + '（非今日）') : '该转债尚未采集持有人数据';
+    }
+  })();
+  // 点击后调用 /api/bond/<code>?refresh=1 重新拉取，成功后刷新本页
+  function refreshBond(){
+    var btn = document.getElementById('updateBtn');
+    btn.disabled = true; btn.textContent = '更新中...';
+    fetch('/api/bond/' + encodeURIComponent("{{ code }}") + '?refresh=1')
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.ok){ location.reload(); }
+        else { btn.disabled = false; btn.textContent = '更新失败，点击重试'; alert((d && d.message) || '更新失败'); }
+      })
+      .catch(function(e){ btn.disabled = false; btn.textContent = '更新失败，点击重试'; alert('请求出错：' + e.message); });
+  }
+</script>
+</body>
+</html>

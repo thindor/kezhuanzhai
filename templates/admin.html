@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理后台 - 可转债持有人信息</title>
+<link rel="stylesheet" href="/static/style.css?v=8">
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <h1>管理后台</h1>
+    <a class="link" href="/admin/logout">退出登录</a>
+  </header>
+
+  <!-- 区块1：已收录转债（已抓取持有人） -->
+  <div class="panel">
+    <div class="panel-head">
+      <h2>已收录转债（已抓取持有人）</h2>
+      <span class="hint">共 <b id="cTotal">0</b> 只</span>
+    </div>
+    <div class="admin-actions">
+      <form id="addForm" onsubmit="return addBond(event)">
+        <input id="addCode" placeholder="输入转债代码（新增或更新）">
+        <button type="submit">新增 / 更新</button>
+      </form>
+      <button class="ghost" onclick="updateAll()">批量更新全部已收录</button>
+      <span id="adminStatus" class="status"></span>
+    </div>
+    <div class="page-toolbar">
+      <span class="hint">每页</span>
+      <select id="cPageSize" onchange="onCollectedPageSize(this.value)">
+        <option value="10">10</option>
+        <option value="20">20</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+      </select>
+      <span class="hint">条</span>
+    </div>
+    <table class="bond-list">
+      <thead>
+        <tr>
+          <th>转债代码</th><th>名称</th><th>正股</th>
+          <th>报告期数</th><th>自然人条数</th><th>下修</th><th>最后更新</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="collectedBody"></tbody>
+    </table>
+    <div class="pager" id="cPager"></div>
+  </div>
+
+  <!-- 区块2：市场全部可转债（分页 + 每页条数 + 批量选择 + 批量更新） -->
+  <div class="panel">
+    <div class="panel-head">
+      <h2>市场全部可转债</h2>
+      <span class="hint">共 <b id="mTotal">0</b> 只 · 已采集 <b id="mDone">0</b> · 未采集 <b id="mTodo">0</b></span>
+    </div>
+    <div class="market-toolbar">
+      <input id="mSearch" placeholder="搜索代码 / 名称 / 正股" oninput="onSearch()">
+      <button onclick="selectPage(true)">全选本页</button>
+      <button onclick="selectMatched(true)">全选筛选结果</button>
+      <button onclick="selectMatched(false)">取消选择</button>
+      <button class="primary" id="batchBtn" disabled onclick="batchUpdate()">批量更新选中 (<span id="selNum">0</span>)</button>
+      <span id="batchStatus" class="status"></span>
+    </div>
+    <div class="page-toolbar">
+      <span class="hint">每页</span>
+      <select id="mPageSize" onchange="onMarketPageSize(this.value)">
+        <option value="10">10</option>
+        <option value="20">20</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+      </select>
+      <span class="hint">条</span>
+    </div>
+    <div class="progress" id="batchProgress" style="display:none">
+      <div class="track"><div class="bar" id="batchBar"></div></div>
+      <span id="batchPct" class="pct"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="bond-list market-list">
+        <thead>
+          <tr>
+            <th style="width:36px"><input type="checkbox" id="checkAll" onclick="selectPage(this.checked)"></th>
+            <th>代码</th><th>名称</th><th>正股</th><th>评级</th><th>下修</th><th>现价</th><th>状态</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="marketBody"></tbody>
+      </table>
+    </div>
+    <div class="pager" id="mPager"></div>
+  </div>
+</div>
+
+<script>
+const MARKET = {{ market|tojson }};
+const COLLECTED = {{ bonds|tojson }};
+const selSet = new Set();
+let marketPage = 1, marketPageSize = 50;
+let collectedPage = 1, collectedPageSize = 50;
+
+function buildPager(total, totalPages, curPage, gotoName){
+  if(totalPages <= 1) return '<span class="pager-info">共 ' + total + ' 只</span>';
+  let html = '<button ' + (curPage<=1?'disabled':'') + ' onclick="' + gotoName + '(' + (curPage-1) + ')">上一页</button>';
+  const pages = [];
+  const win = 2;
+  for(let p=1; p<=totalPages; p++){ if(p===1 || p===totalPages || (p>=curPage-win && p<=curPage+win)) pages.push(p); }
+  let prev = 0;
+  for(const p of pages){
+    if(p - prev > 1) html += '<span class="pager-ellipsis">…</span>';
+    html += '<button class="' + (p===curPage?'active':'') + '" onclick="' + gotoName + '(' + p + ')">' + p + '</button>';
+    prev = p;
+  }
+  html += '<button ' + (curPage>=totalPages?'disabled':'') + ' onclick="' + gotoName + '(' + (curPage+1) + ')">下一页</button>';
+  html += '<span class="pager-info">第 ' + curPage + ' / ' + totalPages + ' 页 · 共 ' + total + ' 只</span>';
+  return html;
+}
+
+/* ---------- 市场全部可转债 ---------- */
+function getFiltered(){
+  const q = (document.getElementById('mSearch').value || '').trim().toLowerCase();
+  if(!q) return MARKET;
+  return MARKET.filter(m => (m.bond_code + ' ' + (m.bond_name||'') + ' ' + (m.stock_name||'')).toLowerCase().includes(q));
+}
+function statusOf(m){ return (m.holder_count && m.holder_count > 0) ? 'done' : 'todo'; }
+
+function renderMarket(){
+  const list = getFiltered();
+  const totalPages = Math.max(1, Math.ceil(list.length / marketPageSize));
+  if(marketPage > totalPages) marketPage = totalPages;
+  if(marketPage < 1) marketPage = 1;
+  const start = (marketPage - 1) * marketPageSize;
+  const rows = list.slice(start, start + marketPageSize);
+  const body = document.getElementById('marketBody');
+  let html = '';
+  let doneAll = 0, todoAll = 0;
+  for(const m of MARKET){ if(statusOf(m) === 'done') doneAll++; else todoAll++; }
+  for(const m of rows){
+    const st = statusOf(m);
+    const checked = selSet.has(m.bond_code) ? 'checked' : '';
+    const price = (m.current_price != null) ? Number(m.current_price).toFixed(2) : '-';
+    const rating = m.rating || '-';
+    const dot = st === 'done' ? '<span class="dot done"></span>已采集' : '<span class="dot todo"></span>未采集';
+    html += '<tr data-code="' + m.bond_code + '">'
+      + '<td><input type="checkbox" class="rowchk" data-code="' + m.bond_code + '" ' + checked + ' onchange="onRowCheck(this)"></td>'
+      + '<td>' + m.bond_code + '</td>'
+      + '<td>' + (m.bond_name || '-') + '</td>'
+      + '<td>' + (m.stock_name || '-') + '</td>'
+      + '<td>' + rating + '</td>'
+      + '<td>' + (m.down_revise_count ? '<a class="down-badge" href="/bond/' + m.bond_code + '">' + m.down_revise_count + ' 次</a>' : '-') + '</td>'
+      + '<td>' + price + '</td>'
+      + '<td>' + dot + '</td>'
+      + '<td class="ops"><button onclick="updateOneMarket(\'' + m.bond_code + '\')">更新</button>'
+      + '<a href="/bond/' + m.bond_code + '">查看</a></td></tr>';
+  }
+  body.innerHTML = html || '<tr><td colspan="9" style="text-align:center;color:#888">无匹配结果</td></tr>';
+  document.getElementById('mTotal').textContent = MARKET.length;
+  document.getElementById('mDone').textContent = doneAll;
+  document.getElementById('mTodo').textContent = todoAll;
+  document.getElementById('mPager').innerHTML = buildPager(list.length, totalPages, marketPage, 'gotoMarketPage');
+  updateSelNum();
+  syncCheckAll();
+}
+function gotoMarketPage(p){ marketPage = p; renderMarket(); }
+function onMarketPageSize(v){ marketPageSize = parseInt(v,10) || 50; marketPage = 1; renderMarket(); }
+
+function onSearch(){ marketPage = 1; renderMarket(); }
+function onRowCheck(el){
+  const code = el.dataset.code;
+  if(el.checked) selSet.add(code); else selSet.delete(code);
+  updateSelNum(); syncCheckAll();
+}
+function syncCheckAll(){
+  const chks = [...document.querySelectorAll('#marketBody .rowchk')];
+  const all = chks.length > 0 && chks.every(c => c.checked);
+  const some = chks.some(c => c.checked);
+  const ca = document.getElementById('checkAll');
+  ca.checked = all; ca.indeterminate = !all && some;
+}
+function selectPage(on){
+  const chks = [...document.querySelectorAll('#marketBody .rowchk')];
+  chks.forEach(c => { c.checked = on; if(on) selSet.add(c.dataset.code); else selSet.delete(c.dataset.code); });
+  updateSelNum(); syncCheckAll();
+}
+function selectMatched(on){
+  const list = getFiltered();
+  list.forEach(m => { if(on) selSet.add(m.bond_code); else selSet.delete(m.bond_code); });
+  updateSelNum(); renderMarket();
+}
+function updateSelNum(){
+  const n = selSet.size;
+  document.getElementById('selNum').textContent = n;
+  document.getElementById('batchBtn').disabled = (n === 0);
+}
+function markDone(code){
+  const m = MARKET.find(x => x.bond_code === code);
+  if(m) m.holder_count = Math.max(m.holder_count || 0, 1);
+}
+
+/* ---------- 已收录转债 ---------- */
+function renderCollected(){
+  const list = COLLECTED;
+  const totalPages = Math.max(1, Math.ceil(list.length / collectedPageSize));
+  if(collectedPage > totalPages) collectedPage = totalPages;
+  if(collectedPage < 1) collectedPage = 1;
+  const start = (collectedPage - 1) * collectedPageSize;
+  const rows = list.slice(start, start + collectedPageSize);
+  const body = document.getElementById('collectedBody');
+  let html = '';
+  for(const b of rows){
+    html += '<tr>'
+      + '<td>' + b.bond_code + '</td>'
+      + '<td>' + (b.bond_name || '-') + '</td>'
+      + '<td>' + (b.stock_name || '-') + '</td>'
+      + '<td>' + (b.holder_count || 0) + '</td>'
+      + '<td>' + (b.natural_count || 0) + '</td>'
+      + '<td>' + (b.down_revise_count ? '<a class="down-badge" href="/bond/' + b.bond_code + '">' + b.down_revise_count + ' 次</a>' : '-') + '</td>'
+      + '<td>' + (b.updated_at || '-') + '</td>'
+      + '<td class="ops"><button onclick="updateOne(\'' + b.bond_code + '\')">更新</button>'
+      + '<button class="danger" onclick="delOne(\'' + b.bond_code + '\')">删除</button>'
+      + '<a href="/bond/' + b.bond_code + '">查看</a></td></tr>';
+  }
+  body.innerHTML = html || '<tr><td colspan="8" style="text-align:center;color:#888">暂无数据，先在上方添加一只转债</td></tr>';
+  document.getElementById('cTotal').textContent = COLLECTED.length;
+  document.getElementById('cPager').innerHTML = buildPager(list.length, totalPages, collectedPage, 'gotoCollectedPage');
+}
+function gotoCollectedPage(p){ collectedPage = p; renderCollected(); }
+function onCollectedPageSize(v){ collectedPageSize = parseInt(v,10) || 50; collectedPage = 1; renderCollected(); }
+
+/* ---------- 更新 / 删除 操作 ---------- */
+async function updateOneMarket(code){
+  setBatch('更新 ' + code + ' ...');
+  try{
+    const r = await fetch('/admin/update/' + code, {method:'POST'});
+    const d = await r.json().catch(() => ({ok:false, message:'返回非 JSON'}));
+    if(d.ok){ markDone(code); setBatch('更新成功：' + code); }
+    else setBatch('失败：' + code + ' ' + (d.message || ''));
+  }catch(e){ setBatch('失败：' + code + ' ' + e); }
+  renderMarket();
+}
+
+async function batchUpdate(){
+  const codes = [...selSet];
+  if(codes.length === 0){ setBatch('请先勾选要更新的转债'); return; }
+  if(!confirm('确认批量更新选中的 ' + codes.length + ' 只转债持有人信息？\n（完成后自动标记已采集，并发 3 只）')) return;
+  const CONC = 3;
+  let idx = 0, done = 0, fail = 0;
+  const prog = document.getElementById('batchProgress');
+  prog.style.display = 'block';
+  document.getElementById('batchBar').style.width = '0%';
+  document.getElementById('batchPct').textContent = '0%';
+  setBatch('批量更新中... 0 / ' + codes.length);
+  async function worker(){
+    while(idx < codes.length){
+      const code = codes[idx++];
+      try{
+        const r = await fetch('/admin/update/' + code, {method:'POST'});
+        const d = await r.json().catch(() => ({ok:false}));
+        if(d.ok) markDone(code); else fail++;
+      }catch(e){ fail++; }
+      done++;
+      const pct = Math.round(done / codes.length * 100);
+      document.getElementById('batchBar').style.width = pct + '%';
+      document.getElementById('batchPct').textContent = pct + '%';
+      setBatch('批量更新中... ' + done + ' / ' + codes.length + (fail ? '（失败 ' + fail + '）' : ''));
+    }
+  }
+  const ws = [];
+  for(let i = 0; i < CONC; i++) ws.push(worker());
+  await Promise.all(ws);
+  prog.style.display = 'none';
+  setBatch('批量更新完成：成功 ' + (codes.length - fail) + ' · 失败 ' + fail + '（共 ' + codes.length + ' 只）');
+  renderMarket();
+}
+
+async function addBond(e){
+  e.preventDefault();
+  const code = document.getElementById('addCode').value.trim();
+  if(!code){ return false; }
+  setStatus('新增 / 更新中...');
+  const r = await fetch('/admin/add', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'code=' + encodeURIComponent(code)});
+  const d = await r.json();
+  setStatus(d.ok ? ('成功：' + (d.message||'')) : ('失败：' + (d.message||'')));
+  if(d.ok) setTimeout(()=>location.reload(), 800);
+  return false;
+}
+async function updateOne(code){
+  setStatus('更新 ' + code + ' ...');
+  const r = await fetch('/admin/update/' + code, {method:'POST'});
+  const d = await r.json();
+  setStatus(d.ok ? ('更新成功：' + (d.message||'')) : ('更新失败：' + (d.message||'')));
+  if(d.ok) setTimeout(()=>location.reload(), 800);
+}
+async function updateAll(){
+  if(!confirm('确认批量更新全部已收录转债？（会逐个重新爬取）')) return;
+  setStatus('批量更新中...');
+  const r = await fetch('/admin/update_all', {method:'POST'});
+  const d = await r.json();
+  setStatus('批量更新完成：共 ' + d.total + ' 只');
+}
+async function delOne(code){
+  if(!confirm('确认删除 ' + code + ' 及其持有人数据？')) return;
+  await fetch('/admin/delete/' + code, {method:'POST'});
+  location.reload();
+}
+function setStatus(s){ document.getElementById('adminStatus').textContent = s; }
+function setBatch(s){ document.getElementById('batchStatus').textContent = s; }
+
+renderMarket();
+renderCollected();
+</script>
+</body>
+</html>

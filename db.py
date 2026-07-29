@@ -1,0 +1,495 @@
+"""本地 SQLite 存储层：转债基础信息 + 各报告期十大持有人。"""
+import sqlite3
+from config import DB_PATH
+
+
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS bonds (
+        bond_code            TEXT PRIMARY KEY,
+        bond_name            TEXT,
+        stock_code           TEXT,
+        stock_name           TEXT,
+        rating               TEXT,
+        issue_scale          REAL,
+        listing_date         TEXT,
+        expire_date          TEXT,
+        current_transfer_price TEXT,
+        current_price        REAL,
+        data_source          TEXT,
+        created_at           TEXT,
+        updated_at           TEXT
+    )""")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS holders (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        bond_code       TEXT,
+        report_period   TEXT,
+        rank            INTEGER,
+        holder_name     TEXT,
+        holder_nature   TEXT,
+        is_natural      INTEGER DEFAULT 0,
+        hold_amount     REAL,
+        hold_ratio      REAL,
+        data_source     TEXT,
+        fetched_at      TEXT
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_holders_bond ON holders(bond_code)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_holders_period ON holders(bond_code, report_period)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_holders_natural ON holders(is_natural)")
+    # 兼容旧库：holders 表缺 is_natural 列时补列，并回填存量自然人标记
+    cur.execute("PRAGMA table_info(holders)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "is_natural" not in cols:
+        cur.execute("ALTER TABLE holders ADD COLUMN is_natural INTEGER DEFAULT 0")
+        cur.execute("UPDATE holders SET is_natural=1 WHERE holder_nature='个人'")
+    # 兼容旧库：bonds 表缺 current_price 列时补列
+    cur.execute("PRAGMA table_info(bonds)")
+    bcols = [r[1] for r in cur.fetchall()]
+    if "current_price" not in bcols:
+        cur.execute("ALTER TABLE bonds ADD COLUMN current_price REAL")
+    # 兼容旧库：下修数据字段（历史下修次数 / 明细 JSON / 采集时间）
+    cur.execute("PRAGMA table_info(bonds)")
+    bcols2 = [r[1] for r in cur.fetchall()]
+    for col, ctype in [
+        ("down_revise_count", "INTEGER"),
+        ("down_revise_json", "TEXT"),
+        ("down_revise_updated_at", "TEXT"),
+    ]:
+        if col not in bcols2:
+            cur.execute("ALTER TABLE bonds ADD COLUMN %s %s" % (col, ctype))
+    # 最近检索/浏览的转债（首页快捷入口）
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS recent_bonds (
+        bond_code   TEXT PRIMARY KEY,
+        bond_name   TEXT,
+        stock_name  TEXT,
+        viewed_at   TEXT
+    )""")
+    conn.commit()
+    conn.close()
+
+
+def upsert_bond(b):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT INTO bonds (
+        bond_code, bond_name, stock_code, stock_name, rating, issue_scale,
+        listing_date, expire_date, current_transfer_price, current_price,
+        data_source, created_at, updated_at
+    ) VALUES (
+        :bond_code, :bond_name, :stock_code, :stock_name, :rating, :issue_scale,
+        :listing_date, :expire_date, :current_transfer_price, :current_price,
+        :data_source, :created_at, :updated_at
+    )
+    ON CONFLICT(bond_code) DO UPDATE SET
+        bond_name=excluded.bond_name,
+        stock_code=excluded.stock_code,
+        stock_name=excluded.stock_name,
+        rating=excluded.rating,
+        issue_scale=excluded.issue_scale,
+        listing_date=excluded.listing_date,
+        expire_date=excluded.expire_date,
+        current_transfer_price=excluded.current_transfer_price,
+        current_price=excluded.current_price,
+        data_source=excluded.data_source,
+        updated_at=excluded.updated_at
+    """, b)
+    conn.commit()
+    conn.close()
+
+
+def delete_holders(bond_code):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM holders WHERE bond_code=?", (bond_code,))
+    conn.commit()
+    conn.close()
+
+
+def insert_holders(rows):
+    if not rows:
+        return
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.executemany("""
+    INSERT INTO holders (
+        bond_code, report_period, rank, holder_name, holder_nature, is_natural,
+        hold_amount, hold_ratio, data_source, fetched_at
+    ) VALUES (
+        :bond_code, :report_period, :rank, :holder_name, :holder_nature, :is_natural,
+        :hold_amount, :hold_ratio, :data_source, :fetched_at
+    )""", rows)
+    conn.commit()
+    conn.close()
+
+
+def get_bond(bond_code):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM bonds WHERE bond_code=?", (bond_code,))
+    r = cur.fetchone()
+    conn.close()
+    return dict(r) if r else None
+
+
+def get_periods(bond_code):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT DISTINCT report_period FROM holders WHERE bond_code=? ORDER BY report_period DESC",
+        (bond_code,),
+    )
+    rows = [x[0] for x in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_holders(bond_code, period):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM holders WHERE bond_code=? AND report_period=? ORDER BY rank",
+        (bond_code, period),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_natural_holders(bond_code=None):
+    """自然人持有人查询（后续功能用）。bond_code 为空则返回全部转债的自然人持仓。
+
+    返回字段含 bond_code / report_period / rank / holder_name / holder_nature /
+    hold_amount / hold_ratio 等，可直接用于统计或展示。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    if bond_code:
+        cur.execute(
+            "SELECT * FROM holders WHERE bond_code=? AND is_natural=1 "
+            "ORDER BY report_period DESC, rank",
+            (bond_code,),
+        )
+    else:
+        cur.execute(
+            "SELECT * FROM holders WHERE is_natural=1 "
+            "ORDER BY bond_code, report_period DESC, rank"
+        )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def list_bonds():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT b.*,
+               (SELECT COUNT(*) FROM holders h WHERE h.bond_code=b.bond_code) AS holder_count,
+               (SELECT COUNT(*) FROM holders h WHERE h.bond_code=b.bond_code AND h.is_natural=1) AS natural_count,
+               (SELECT MAX(report_period) FROM holders h WHERE h.bond_code=b.bond_code) AS latest_period
+        FROM bonds b
+        WHERE (SELECT COUNT(*) FROM holders h WHERE h.bond_code=b.bond_code) > 0
+        ORDER BY b.updated_at DESC
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def list_market_bonds():
+    """全市场可交易可转债（bonds 全量），并标注每只是否已采集持有人。
+
+    返回字段：bond_code, bond_name, stock_code, stock_name, rating,
+    current_price, issue_scale, holder_count(持有人记录数),
+    latest_period(最近采集报告期)。holder_count>0 表示已采集持有人。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT b.bond_code, b.bond_name, b.stock_code, b.stock_name, b.rating,
+               b.current_price, b.issue_scale, b.down_revise_count,
+               (SELECT COUNT(*) FROM holders h WHERE h.bond_code=b.bond_code) AS holder_count,
+               (SELECT MAX(report_period) FROM holders h WHERE h.bond_code=b.bond_code) AS latest_period
+        FROM bonds b
+        ORDER BY b.bond_code
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def count_bonds():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM bonds")
+    n = cur.fetchone()[0]
+    conn.close()
+    return n
+
+
+def get_all_natural_persons(limit=2000, offset=0):
+    """自然人聚合榜：去重列出自然人，含出现次数/涉及转债数/最新报告期。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT holder_name,
+               COUNT(*)              AS record_count,
+               COUNT(DISTINCT bond_code) AS bond_count,
+               MAX(report_period)    AS latest_period
+        FROM holders
+        WHERE is_natural = 1
+        GROUP BY holder_name
+        ORDER BY bond_count DESC, record_count DESC, holder_name
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def count_natural_persons():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(DISTINCT holder_name) FROM holders WHERE is_natural = 1")
+    n = cur.fetchone()[0]
+    conn.close()
+    return n
+
+
+def get_person_holdings(name):
+    """某自然人持有的全部债券明细（跨转债、跨报告期）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT h.*, b.bond_name, b.stock_name, b.stock_code, b.rating, b.current_price
+        FROM holders h
+        LEFT JOIN bonds b ON h.bond_code = b.bond_code
+        WHERE h.holder_name = ?
+        ORDER BY h.bond_code, h.report_period DESC, h.rank
+    """, (name,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_person_latest_holdings(name):
+    """某自然人去重后的最新持仓汇总（每只转债只取最新报告期）。
+
+    返回列表，每项含：bond_code, bond_name, stock_name, report_period,
+    hold_amount(万张), current_price(元/张), periods_count(该转债出现期数),
+    mv_wan(该转债估算市值，万元)。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT h.bond_code, h.report_period, h.hold_amount,
+               b.bond_name, b.stock_name, b.current_price
+        FROM holders h
+        LEFT JOIN bonds b ON h.bond_code = b.bond_code
+        WHERE h.holder_name = ?
+        ORDER BY h.bond_code, h.report_period DESC
+    """, (name,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    best = {}
+    for r in rows:
+        code = r["bond_code"]
+        rp = r["report_period"] or ""
+        if code not in best or rp > (best[code]["report_period"] or ""):
+            best[code] = r
+
+    out = []
+    for code, r in best.items():
+        price = r["current_price"] if r["current_price"] else 100.0
+        mv = (r["hold_amount"] or 0) * price
+        out.append({
+            "bond_code": code,
+            "bond_name": r["bond_name"] or code,
+            "stock_name": r["stock_name"] or "-",
+            "report_period": r["report_period"] or "-",
+            "hold_amount": r["hold_amount"],
+            "current_price": price,
+            "periods_count": sum(1 for x in rows if x["bond_code"] == code),
+            "mv_wan": round(mv, 2),
+        })
+    out.sort(key=lambda x: x["mv_wan"], reverse=True)
+    return out
+
+
+def get_person_market_value(name):
+    """某自然人去重后的估算市值（万元）及统计口径。
+
+    关键：同一只转债可能出现在多个报告期，不能把各期持有量简单相加（否则
+    会重复计算市值，闹笑话）。口径与 get_natural_ranking 一致——
+    每个 (自然人, 转债) 仅取最新报告期持仓，市值 = 持有量(万张) × 现价(元/张)。
+    现价缺失按面值 100 元/张 估算。
+
+    返回 (mv_wan, bond_count, record_count)：
+      mv_wan      去重估算市值（万元，保留两位小数）
+      bond_count  涉及转债数（按 bond_code 去重）
+      record_count 持仓记录条数（跨报告期原始记录数）
+    """
+    holdings = get_person_latest_holdings(name)
+    mv = sum(h["mv_wan"] for h in holdings)
+    return round(mv, 2), len(holdings), sum(h["periods_count"] for h in holdings)
+
+
+def get_natural_ranking(limit=50):
+    """可转债牛散榜：自然人按持仓市值（估算）降序排列。
+
+    市值估算口径：对每个（自然人, 转债）取最新报告期持仓，市值 = 持有量(万张) × 现价(元/张)
+    = 万元；现价缺失时按面值 100 元/张 估算。返回字段：
+      holder_name, mv_wan(估算市值,万元), bond_count(涉及转债数),
+      record_count(出现次数), top_bonds([{bond_name, mv_wan}...])
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT h.holder_name, h.bond_code, h.report_period, h.hold_amount,
+               b.bond_name, b.current_price
+        FROM holders h
+        LEFT JOIN bonds b ON h.bond_code = b.bond_code
+        WHERE h.is_natural = 1
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    # 每个 (自然人, 转债) 仅保留最新报告期
+    best = {}
+    for r in rows:
+        key = (r["holder_name"], r["bond_code"])
+        if key not in best or r["report_period"] > best[key]["report_period"]:
+            best[key] = r
+
+    # 按自然人聚合
+    agg = {}
+    for (name, _code), v in best.items():
+        price = v["current_price"] if v["current_price"] else 100.0
+        mv = (v["hold_amount"] or 0) * price  # 万元
+        a = agg.setdefault(name, {"holder_name": name, "mv_wan": 0.0,
+                                  "bonds": set(), "top": []})
+        a["mv_wan"] += mv
+        a["bonds"].add(v["bond_code"])
+        a["top"].append({"bond_name": v["bond_name"] or v["bond_code"], "mv_wan": mv})
+
+    result = []
+    for name, a in agg.items():
+        top = sorted(a["top"], key=lambda x: x["mv_wan"], reverse=True)[:3]
+        result.append({
+            "holder_name": name,
+            "mv_wan": round(a["mv_wan"], 2),
+            "bond_count": len(a["bonds"]),
+            "record_count": len(a["top"]),
+            "top_bonds": top,
+        })
+    result.sort(key=lambda x: x["mv_wan"], reverse=True)
+    return result[:limit]
+
+
+# ---------------- 历史下修数据（集思录 adj_logs 采集） ----------------
+def save_down_revise(bond_code, count, records):
+    """保存某转债的历史下修数据。
+
+    count   : 下修次数（整数）
+    records : list[dict]，每条含 meeting_date / price_before / price_after /
+              effective_date / floor_price / bond_name
+    """
+    import json as _json
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE bonds
+        SET down_revise_count = ?,
+            down_revise_json = ?,
+            down_revise_updated_at = ?
+        WHERE bond_code = ?
+    """, (count, _json.dumps(records, ensure_ascii=False), _now_str(), bond_code))
+    if cur.rowcount == 0:
+        # 转债尚不在 bonds 表（理论不会发生，seed 已全量），先插入空壳
+        cur.execute("""
+            INSERT OR IGNORE INTO bonds (bond_code, down_revise_count,
+                down_revise_json, down_revise_updated_at)
+            VALUES (?, ?, ?, ?)
+        """, (bond_code, count, _json.dumps(records, ensure_ascii=False), _now_str()))
+    conn.commit()
+    conn.close()
+
+
+def get_down_revise(bond_code):
+    """返回 (count, records, updated_at)。
+
+    count     : 下修次数（None 表示尚未采集）
+    records   : 解析后的 list[dict]
+    updated_at: 采集时间字符串
+    """
+    import json as _json
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT down_revise_count, down_revise_json, down_revise_updated_at "
+        "FROM bonds WHERE bond_code=?", (bond_code,))
+    r = cur.fetchone()
+    conn.close()
+    if not r:
+        return None, [], None
+    count = r[0]
+    raw = r[1]
+    try:
+        records = _json.loads(raw) if raw else []
+    except Exception:
+        records = []
+    return count, records, r[2]
+
+
+def get_down_revise_count(bond_code):
+    """快速取单只转债的下修次数（未采集返回 None）。供列表/个人页批量展示。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT down_revise_count FROM bonds WHERE bond_code=?", (bond_code,))
+    r = cur.fetchone()
+    conn.close()
+    return r[0] if r else None
+
+
+def _now_str():
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def record_bond_view(bond_code, bond_name=None, stock_name=None):
+    """记录一只转债被检索/浏览，供首页「最近检索」快捷入口。UPSERT 按 viewed_at 更新。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT INTO recent_bonds (bond_code, bond_name, stock_name, viewed_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(bond_code) DO UPDATE SET
+        bond_name=excluded.bond_name,
+        stock_name=excluded.stock_name,
+        viewed_at=excluded.viewed_at
+    """, (bond_code, bond_name, stock_name, _now_str()))
+    conn.commit()
+    conn.close()
+
+
+def get_recent_bonds(limit=12):
+    """返回最近浏览的转债（按 viewed_at 倒序），用于首页快捷入口。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT bond_code, bond_name, stock_name FROM recent_bonds "
+                "ORDER BY viewed_at DESC LIMIT ?", (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows

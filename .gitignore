@@ -1,0 +1,31 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+env/
+.Python
+
+# ---- 运行时数据库（本地采集结果，不入库；可重新爬取生成）----
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ---- 搜索索引缓存（app.py 启动时自动重建，无需入库）----
+bond_index.json
+
+# ---- 日志 ----
+*.log
+
+# ---- 旧版 / 备份模板（下划线前缀为历史备份，非线上模板）----
+_*.html
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- 本地环境变量（如含密钥请勿入库）----
+.env

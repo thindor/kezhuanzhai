@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>自然人持有人榜单 - 可转债持有人信息</title>
+<meta name="description" content="出现在可转债十大持有人中的自然人（个人）持有人完整榜单，按持有转债数量排序。点击查看每个人持有的全部可转债。">
+<meta name="keywords" content="自然人持有人,个人持有人,可转债牛散,十大持有人榜单">
+<link rel="stylesheet" href="/static/style.css?v=2">
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <a class="brand" href="/">可转债持有人信息</a>
+    <nav>
+      <a href="/">首页</a>
+      <a href="{{ url_for('persons') }}">牛散榜</a>
+      <a href="/admin">管理后台</a>
+    </nav>
+  </header>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>🧑 自然人持有人榜单</h2>
+      <span class="hint">共 <strong>{{ total }}</strong> 位自然人持有人（出现在可转债十大持有人中的个人）· 按持有转债数量排序</span>
+    </div>
+
+    {% if persons %}
+    <table class="rank">
+      <thead>
+        <tr>
+          <th style="width:52px">#</th>
+          <th>持有人</th>
+          <th>持有转债</th>
+          <th>出现次数</th>
+          <th>最近报告期</th>
+          <th style="text-align:right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for p in persons %}
+        <tr>
+          <td><span class="rk {% if (loop.index + (page-1)*50) <= 3 %}top{% endif %}">{{ loop.index + (page-1)*50 }}</span></td>
+          <td><a class="nm" href="{{ url_for('person', name=p.holder_name) }}">{{ p.holder_name }}</a></td>
+          <td>{{ p.bond_count }} 只</td>
+          <td>{{ p.record_count }} 次</td>
+          <td>{{ p.latest_period or '-' }}</td>
+          <td style="text-align:right"><a class="link" href="{{ url_for('person', name=p.holder_name) }}">查看持仓 →</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="hint">暂无自然人数据，请先在管理后台添加转债。</p>
+    {% endif %}
+  </section>
+
+  <div class="pager">
+    {% if page > 1 %}<a href="{{ url_for('persons', page=page-1) }}">上一页</a>
+    {% else %}<span class="disabled">上一页</span>{% endif %}
+    <span>第 {{ page }} / {{ total_pages }} 页</span>
+    {% if page < total_pages %}<a href="{{ url_for('persons', page=page+1) }}">下一页</a>
+    {% else %}<span class="disabled">下一页</span>{% endif %}
+  </div>
+</div>
+</body>
+</html>
