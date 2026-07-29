@@ -2,6 +2,8 @@
 
 适用：Ubuntu 22.04 / 24.04（其他 Debian 系类似）。代码仓库：https://github.com/thindor/kezhuanzhai
 
+> 用 **宝塔面板** 部署更省事？见同目录 [`BAOTA.md`](./BAOTA.md)（宝塔自动建 venv / 反代 / SSL / 进程守护）。
+
 ## 0. 约定
 - 代码目录：`/opt/kezhuanzhai`
 - 虚拟环境：`/opt/kezhuanzhai/venv`

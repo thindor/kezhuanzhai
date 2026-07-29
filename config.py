@@ -4,9 +4,9 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "cb_holders.db")
 
-# 管理后台账号（按需求固定）
+# 管理后台账号：生产环境请通过环境变量 ADMIN_PASS 覆盖默认弱密码
 ADMIN_USER = "admin"
-ADMIN_PASS = "admin888"
+ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin888")
 
 # Flask 会话密钥：生产环境请通过环境变量 CB_SECRET_KEY 覆盖
 SECRET_KEY = os.environ.get("CB_SECRET_KEY", "cb_holders_local_secret_2026_change_me")
