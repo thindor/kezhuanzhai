@@ -507,6 +507,19 @@ def bond_detail(code):
     # 最近一次下修提议（股东大会审议）日：records 已按最新在前
     latest_down_revise = records[0] if records else None
 
+    # 当前转股价：优先用集思录最新下修后转股价（已下修债才是真正的当前价），
+    # 无下修记录时回退东方财富 current_transfer_price
+    eff_tp = None
+    if latest_down_revise and latest_down_revise.get("price_after") is not None:
+        eff_tp = latest_down_revise.get("price_after")
+    if eff_tp is None:
+        eff_tp = bond.get("current_transfer_price")
+    # 兜底强转浮点（DB 该列为 TEXT 亲和，取出可能是字符串）
+    try:
+        eff_tp = float(eff_tp)
+    except (TypeError, ValueError):
+        eff_tp = None
+
     return render_template("bond.html", bond=bond, code=code,
                            down_count=count, down_records=records,
                            dr_updated=dr_updated,
@@ -515,7 +528,8 @@ def bond_detail(code):
                            current_period=current_period,
                            holders=holders,
                            natural_holders=natural_holders,
-                           latest_down_revise=latest_down_revise)
+                           latest_down_revise=latest_down_revise,
+                           eff_tp=eff_tp)
 
 
 @app.route("/api/bond/<code>/holders")

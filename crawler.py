@@ -64,12 +64,58 @@ def fetch_bond_basic(code):
             "issue_scale": row.get("ACTUAL_ISSUE_SCALE"),
             "listing_date": (row.get("LISTING_DATE") or "")[:10],
             "expire_date": (row.get("EXPIRE_DATE") or "")[:10],
-            "current_transfer_price": row.get("TRANSFER_PRICE"),
+            "current_transfer_price": row.get("TRANSFER_PRICE") or row.get("TRANSFER_VALUE") or row.get("INITIAL_TRANSFER_PRICE"),
             "is_delisted": is_delisted,
             "delist_date": delist_date,
             "data_source": "东方财富数据中心",
         }
     return None
+
+
+def fetch_all_transfer_prices():
+    """批量取全市场转债的当前转股价。
+
+    东方财富 RPT_BOND_CB_LIST 中 TRANSFER_PRICE 字段普遍为空，真正可用的转股价
+    在 TRANSFER_VALUE（对未下修债即初始转股价）。此处优先 TRANSFER_VALUE，回退
+    INITIAL_TRANSFER_PRICE，用于回填 bonds.current_transfer_price。
+
+    返回 {bond_code: price(float|None)}。
+    """
+    out = {}
+    page, page_size, max_pages = 1, 500, 8
+    while page <= max_pages:
+        params = {
+            "reportName": "RPT_BOND_CB_LIST",
+            "columns": "ALL",
+            "pageSize": page_size,
+            "source": "WEB",
+            "client": "WEB",
+            "p": page,
+        }
+        try:
+            r = requests.get(EM_BASE, params=params, headers=EM_HEADERS, timeout=15)
+            d = r.json()
+        except Exception:
+            break
+        if not (d.get("success") and d.get("result") and d["result"].get("data")):
+            break
+        batch = d["result"]["data"]
+        if not batch:
+            break
+        for row in batch:
+            code = row.get("SECURITY_CODE")
+            if not code:
+                continue
+            tp = row.get("TRANSFER_PRICE") or row.get("TRANSFER_VALUE") or row.get("INITIAL_TRANSFER_PRICE")
+            try:
+                tp = float(tp) if tp is not None else None
+            except (ValueError, TypeError):
+                tp = None
+            out[code] = tp
+        if len(batch) < page_size:
+            break
+        page += 1
+    return out
 
 
 def fetch_all_bonds():

@@ -139,6 +139,39 @@ def upsert_bond(b):
     conn.close()
 
 
+def backfill_transfer_prices():
+    """回填 bonds.current_transfer_price 中为空的行。
+
+    口径：优先用集思录最新下修后转股价（down_revise_json 第一条 price_after，
+    对下修过的债才是真正的当前价），回退东方财富 TRANSFER_VALUE。仅覆盖
+    当前为空/缺失的行，不动已有值。返回更新的行数。
+    """
+    import json as _json
+    import crawler as _crawler
+    emap = _crawler.fetch_all_transfer_prices()
+    conn = get_conn()
+    cur = conn.cursor()
+    rows = cur.execute("SELECT bond_code, down_revise_json, current_transfer_price FROM bonds").fetchall()
+    n = 0
+    for code, raw, cur_tp in rows:
+        price = None
+        if raw:
+            try:
+                recs = _json.loads(raw)
+                if recs and recs[0].get("price_after") is not None:
+                    price = recs[0]["price_after"]
+            except Exception:
+                pass
+        if price is None:
+            price = emap.get(code)
+        if (cur_tp is None or cur_tp == "") and price is not None:
+            cur.execute("UPDATE bonds SET current_transfer_price=? WHERE bond_code=?", (price, code))
+            n += 1
+    conn.commit()
+    conn.close()
+    return n
+
+
 def delete_holders(bond_code):
     conn = get_conn()
     cur = conn.cursor()

@@ -70,7 +70,7 @@
 
   <div class="info-cards">
     <div class="info"><div class="num">{{ '%.2f'|format(bond.current_price) if bond.current_price else '-' }}</div><div class="label">现价(元)</div></div>
-    <div class="info"><div class="num">{{ bond.current_transfer_price or '-' }}</div><div class="label">转股价(元)</div></div>
+    <div class="info"><div class="num">{{ '%.2f'|format(eff_tp) if eff_tp is not none else '-' }}</div><div class="label">转股价(元)</div></div>
     <div class="info"><div class="num">{{ bond.issue_scale or '-' }}</div><div class="label">发行规模(亿)</div></div>
     <div class="info"><div class="num">{{ bond.listing_date or '-' }}</div><div class="label">上市日</div></div>
     <div class="info"><div class="num">{{ bond.expire_date or '-' }}</div><div class="label">到期日</div></div>
