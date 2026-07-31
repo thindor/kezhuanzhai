@@ -66,7 +66,7 @@
   <section class="panel">
     <div class="section-head">
       <h3>📊 去重后持仓汇总</h3>
-      <span class="hint">同一只转债跨多个报告期只取最新一期，不重复累加；市值 = 持有量(万张) × 现价(元/张)，现价缺失按 100 元计</span>
+      <span class="hint">同一只转债跨多个报告期只取最新一期，不重复累加；市值 = 持有量(万张) × 现价(元/张)，现价缺失按 100 元计{% if not is_natural %}；已退市转债（标「已退市」）不计入合计市值与持有只数{% endif %}</span>
     </div>
     <div class="table-wrap">
       <table class="rank">
@@ -85,7 +85,7 @@
         </thead>
         <tbody>
         {% for h in latest %}
-          <tr>
+          <tr{% if h.is_delisted %} class="delisted-row"{% endif %}>
             <td><a class="link" href="/?code={{ h.bond_code }}">{{ h.bond_code }}</a></td>
             <td><a class="nm" href="/?code={{ h.bond_code }}">{{ h.bond_name or '-' }}</a>{% if h.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}</td>
             <td>{{ h.stock_name or '-' }}</td>
