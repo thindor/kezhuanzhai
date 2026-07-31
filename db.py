@@ -318,6 +318,8 @@ def search_bonds(code="", delisted="all", has_down="all", down_min=None,
         "expire": "b.expire_date ASC",
     }
     order = order_map.get(sort, "b.bond_code")
+    # 排序时，已退市可转债统一排在最后（is_delisted=0 在前，1 在后）
+    order = "COALESCE(b.is_delisted,0) ASC, " + order
 
     # 持有人数 / 最近采集期 用一次子查询聚合，避免逐行相关子查询
     base = (
@@ -415,7 +417,7 @@ def get_all_institutions(limit=2000, offset=0):
                ROUND(SUM(l.hold_amount * COALESCE(b.current_price, 100.0)), 2) AS mv_wan
         FROM latest l
         LEFT JOIN bonds b ON l.bond_code = b.bond_code
-        WHERE l.rn = 1
+        WHERE l.rn = 1 AND COALESCE(b.is_delisted, 0) = 0
         GROUP BY l.holder_name
         ORDER BY mv_wan DESC, bond_count DESC, l.holder_name
         LIMIT ? OFFSET ?
@@ -578,7 +580,7 @@ def get_institution_ranking(limit=50):
     cur = conn.cursor()
     cur.execute("""
         SELECT h.holder_name, h.bond_code, h.report_period, h.hold_amount,
-               b.bond_name, b.current_price
+               b.bond_name, b.current_price, b.is_delisted
         FROM holders h
         LEFT JOIN bonds b ON h.bond_code = b.bond_code
         WHERE h.is_natural = 0
@@ -594,6 +596,9 @@ def get_institution_ranking(limit=50):
 
     agg = {}
     for (name, _code), v in best.items():
+        # 已退市可转债不计入机构持仓市值
+        if v.get("is_delisted"):
+            continue
         price = v["current_price"] if v["current_price"] else 100.0
         mv = (v["hold_amount"] or 0) * price
         a = agg.setdefault(name, {"holder_name": name, "mv_wan": 0.0,
