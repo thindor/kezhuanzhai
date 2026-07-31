@@ -34,7 +34,9 @@
     <a class="brand" href="/">可转债持有人信息</a>
     <nav>
       <a href="/">首页</a>
+      <a href="/bonds">全部转债</a>
       <a href="{{ url_for('persons') }}">牛散榜</a>
+      <a href="/institutions">机构榜</a>
       <a href="/admin">管理后台</a>
     </nav>
   </header>
@@ -87,18 +89,62 @@
     </div>
     <div class="table-wrap">
       {% if down_count and down_count > 0 %}
-      <p class="xiuxie-lead">{{ bond.bond_name }} 历史共发生 <b>{{ down_count }}</b> 次下修，最近一次下修提议于 <b>{{ latest_down_revise.meeting_date }}</b>。完整明细见专题页：</p>
+      <p class="seo-lead">{{ bond.bond_name }} 历史共发生 <b>{{ down_count }}</b> 次下修，最近一次下修提议于 <b>{{ latest_down_revise.meeting_date }}</b>。下表按股东大会日倒序列出每次下修的转股价调整明细。</p>
+      <table class="rank down-revise">
+        <caption>{{ bond.bond_name or code }}（{{ code }}）历史下修记录明细</caption>
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">股东大会日（下修提议审议）</th>
+            <th scope="col">下修前转股价(元)</th>
+            <th scope="col">下修后转股价(元)</th>
+            <th scope="col">新转股价生效日</th>
+            <th scope="col">下修底价(元)</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in down_records %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td>{{ r.meeting_date }}</td>
+            <td>{{ r.price_before if r.price_before is not none else '-' }}</td>
+            <td class="mv">{{ r.price_after if r.price_after is not none else '-' }}</td>
+            <td>{{ r.effective_date }}</td>
+            <td>{{ r.floor_price if r.floor_price is not none else '-' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
       {% else %}
       <p class="empty">该转债历史上未发生下修（集思录无下修记录）。</p>
       {% endif %}
-      <a class="xiuxie-link" href="{{ url_for('xiuxie_detail', code=code) }}">📉 查看完整历史下修记录 →</a>
+    </div>
+  </section>
+
+  <section class="panel faq">
+    <div class="section-head">
+      <h3>❓ 可转债下修常见问题</h3>
+    </div>
+    <div class="faq-list">
+      <details>
+        <summary>什么是可转债下修（向下修正转股价）？</summary>
+        <p>可转债下修指当正股股价持续低于当期转股价一定幅度时，发行人在股东大会批准后主动调低转股价格。它能提升转债的转股价值与平价，是发行人促进持有人转股、减轻还本压力的重要手段。</p>
+      </details>
+      <details>
+        <summary>下修对可转债持有人有什么影响？</summary>
+        <p>下修通常直接抬升转债平价，使转债更易跟随正股上涨；若下修到位（转股价接近下修底价），转股溢价率会显著压缩、股性增强。但下修不改变面值与票息，最终利好取决于正股后续表现。</p>
+      </details>
+      <details>
+        <summary>可转债下修次数越多越好吗？</summary>
+        <p>不一定。一次“到位”的大幅下修往往比多次小幅下修更具实质性利好；频繁下修可能说明正股持续走弱。结合本页的“历史下修次数”与每次明细，可判断下修幅度与节奏。</p>
+      </details>
     </div>
   </section>
 
   <section class="panel">
     <div class="section-head">
       <h3 class="holders-title">📋 十大持有人{% if current_period %}（{{ current_period }}）{% endif %}</h3>
-      <span class="hint">数据来源：东方财富数据中心；自然人可点击查看其全部持仓</span>
+      <span class="hint">数据来源：东方财富数据中心；点击持有人名称可查看其全部持仓</span>
     </div>
     {% if periods and periods|length > 1 %}
     <div class="period-tabs" id="periodTabs">
@@ -117,7 +163,7 @@
           {% set ncls = {'基金':'fund','个人':'natural','一般机构':'org'}.get(h.holder_nature, 'unknown') %}
           <tr class="{% if h.is_natural %}natural{% endif %}">
             <td>{{ h.rank }}</td>
-            <td>{% if h.is_natural %}<a class="nm" href="{{ url_for('person', name=h.holder_name) }}">{{ h.holder_name }}</a>{% else %}{{ h.holder_name }}{% endif %}</td>
+            <td><a class="nm" href="{{ url_for('holder', name=h.holder_name) }}">{{ h.holder_name }}</a></td>
             <td><span class="nature-tag {{ ncls }}">{{ h.holder_nature or '未知' }}</span></td>
             <td>{{ h.hold_amount }}</td>
             <td>{{ h.hold_ratio }}%</td>
@@ -188,9 +234,7 @@
     var rows = '';
     holders.forEach(function(h){
       var ncls = ({'基金':'fund','个人':'natural','一般机构':'org'}[h.holder_nature] || 'unknown');
-      var nameCell = h.is_natural
-        ? '<a class="nm" href="/person/' + encodeURIComponent(h.holder_name) + '">' + esc(h.holder_name) + '</a>'
-        : esc(h.holder_name);
+      var nameCell = '<a class="nm" href="/holder/' + encodeURIComponent(h.holder_name) + '">' + esc(h.holder_name) + '</a>';
       rows += '<tr class="' + (h.is_natural ? 'natural' : '') + '">'
         + '<td>' + h.rank + '</td>'
         + '<td>' + nameCell + '</td>'

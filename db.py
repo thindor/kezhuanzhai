@@ -278,6 +278,67 @@ def list_market_bonds():
     return rows
 
 
+def search_bonds(code="", delisted="all", has_down="all", down_min=None,
+                 sort="code", page=1, page_size=50):
+    """检索已采集可转债，支持按编号/名称、退市状态、下修次数过滤与排序。
+
+    参数：
+      code     编号/名称/正股 模糊匹配
+      delisted 'all' | 'delisted'(仅已退市) | 'active'(仅未退市)
+      has_down 'all' | 'yes'(有下修) | 'no'(无下修)
+      down_min 最小下修次数（int，可选）
+      sort     'code' | 'down'(下修次数降) | 'updated'(最近更新降) |
+               'holder'(持有人数降) | 'expire'(到期日升)
+    返回 (rows, total)。
+    """
+    where = []
+    params = []
+    if code:
+        like = "%" + code + "%"
+        where.append("(b.bond_code LIKE ? OR b.bond_name LIKE ? OR b.stock_name LIKE ?)")
+        params.extend([like, like, like])
+    if delisted == "delisted":
+        where.append("COALESCE(b.is_delisted,0)=1")
+    elif delisted == "active":
+        where.append("COALESCE(b.is_delisted,0)=0")
+    if has_down == "yes":
+        where.append("COALESCE(b.down_revise_count,0) > 0")
+    elif has_down == "no":
+        where.append("COALESCE(b.down_revise_count,0) = 0")
+    if down_min is not None:
+        where.append("COALESCE(b.down_revise_count,0) >= ?")
+        params.append(down_min)
+
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    order_map = {
+        "code": "b.bond_code",
+        "down": "COALESCE(b.down_revise_count,0) DESC, b.bond_code",
+        "updated": "b.updated_at DESC",
+        "holder": "holder_count DESC, b.bond_code",
+        "expire": "b.expire_date ASC",
+    }
+    order = order_map.get(sort, "b.bond_code")
+
+    # 持有人数 / 最近采集期 用一次子查询聚合，避免逐行相关子查询
+    base = (
+        "FROM bonds b "
+        "LEFT JOIN (SELECT bond_code, COUNT(*) AS holder_count, "
+        "                  MAX(report_period) AS latest_period "
+        "           FROM holders GROUP BY bond_code) h ON h.bond_code = b.bond_code"
+    )
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) " + base + where_sql, params)
+    total = cur.fetchone()[0]
+    cur.execute(
+        "SELECT b.*, COALESCE(h.holder_count,0) AS holder_count, h.latest_period "
+        + base + where_sql + " ORDER BY " + order + " LIMIT ? OFFSET ?",
+        params + [page_size, (page - 1) * page_size])
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows, total
+
+
 def count_bonds():
     conn = get_conn()
     cur = conn.cursor()
@@ -325,6 +386,49 @@ def count_natural_persons():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(DISTINCT holder_name) FROM holders WHERE is_natural = 1")
+    n = cur.fetchone()[0]
+    conn.close()
+    return n
+
+
+def get_all_institutions(limit=2000, offset=0):
+    """机构持有人聚合榜：按持仓估算市值（万元）降序排列，支持分页。
+
+    与 get_all_natural_persons 口径一致，仅筛选 is_natural = 0（机构/基金）。
+    市值 = 持有量(万张) × 现价(元/张)，现价缺失按面值 100 元/张 估算。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        WITH latest AS (
+            SELECT h.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY h.holder_name, h.bond_code
+                       ORDER BY h.report_period DESC
+                   ) AS rn
+            FROM holders h
+            WHERE h.is_natural = 0
+        )
+        SELECT l.holder_name,
+               COUNT(*)                        AS record_count,
+               COUNT(DISTINCT l.bond_code)     AS bond_count,
+               ROUND(SUM(l.hold_amount * COALESCE(b.current_price, 100.0)), 2) AS mv_wan
+        FROM latest l
+        LEFT JOIN bonds b ON l.bond_code = b.bond_code
+        WHERE l.rn = 1
+        GROUP BY l.holder_name
+        ORDER BY mv_wan DESC, bond_count DESC, l.holder_name
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def count_institutions():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(DISTINCT holder_name) FROM holders WHERE is_natural = 0")
     n = cur.fetchone()[0]
     conn.close()
     return n
@@ -443,6 +547,55 @@ def get_natural_ranking(limit=50):
     for (name, _code), v in best.items():
         price = v["current_price"] if v["current_price"] else 100.0
         mv = (v["hold_amount"] or 0) * price  # 万元
+        a = agg.setdefault(name, {"holder_name": name, "mv_wan": 0.0,
+                                  "bonds": set(), "top": []})
+        a["mv_wan"] += mv
+        a["bonds"].add(v["bond_code"])
+        a["top"].append({"bond_name": v["bond_name"] or v["bond_code"], "mv_wan": mv})
+
+    result = []
+    for name, a in agg.items():
+        top = sorted(a["top"], key=lambda x: x["mv_wan"], reverse=True)[:3]
+        result.append({
+            "holder_name": name,
+            "mv_wan": round(a["mv_wan"], 2),
+            "bond_count": len(a["bonds"]),
+            "record_count": len(a["top"]),
+            "top_bonds": top,
+        })
+    result.sort(key=lambda x: x["mv_wan"], reverse=True)
+    return result[:limit]
+
+
+def get_institution_ranking(limit=50):
+    """可转债机构榜：机构（含基金 / 一般机构）按持仓市值（估算）降序排列。
+
+    市值估算口径与 get_natural_ranking 一致：每个（机构, 转债）仅取最新报告期
+    持仓，市值 = 持有量(万张) × 现价(元/张) = 万元；现价缺失按面值 100 元/张 估算。
+    返回字段：holder_name, mv_wan, bond_count, record_count, top_bonds。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT h.holder_name, h.bond_code, h.report_period, h.hold_amount,
+               b.bond_name, b.current_price
+        FROM holders h
+        LEFT JOIN bonds b ON h.bond_code = b.bond_code
+        WHERE h.is_natural = 0
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    best = {}
+    for r in rows:
+        key = (r["holder_name"], r["bond_code"])
+        if key not in best or r["report_period"] > best[key]["report_period"]:
+            best[key] = r
+
+    agg = {}
+    for (name, _code), v in best.items():
+        price = v["current_price"] if v["current_price"] else 100.0
+        mv = (v["hold_amount"] or 0) * price
         a = agg.setdefault(name, {"holder_name": name, "mv_wan": 0.0,
                                   "bonds": set(), "top": []})
         a["mv_wan"] += mv

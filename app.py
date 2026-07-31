@@ -31,7 +31,8 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 get_person_market_value, get_person_latest_holdings,
                 get_natural_ranking, get_down_revise, save_down_revise,
                 get_down_revise_count, record_bond_view, get_recent_bonds,
-                set_delisted)
+                set_delisted, search_bonds, get_all_institutions,
+                get_institution_ranking, count_institutions)
 import crawler
 
 app = Flask(__name__)
@@ -262,9 +263,10 @@ def index():
     code = request.args.get("code", "").strip()
     persons = get_all_natural_persons(limit=30, offset=0)
     ranking = get_natural_ranking(limit=30)
+    inst_ranking = get_institution_ranking(limit=30)
     recent = get_recent_bonds(12)
     return render_template("index.html", code=code, persons=persons,
-                           ranking=ranking, recent=recent)
+                           ranking=ranking, inst_ranking=inst_ranking, recent=recent)
 
 
 @app.route("/api/bond/<code>")
@@ -372,20 +374,94 @@ def persons():
                            total_pages=total_pages, total=total)
 
 
-@app.route("/person/<name>")
-def person(name):
+def holder_view(name):
+    """统一持有人视图：支持自然人 / 机构，按数据自动区分。
+
+    同一持有人名下的记录，若全部 is_natural=1 视为自然人，否则视为机构；
+    两只均渲染 holder.html，仅品牌/结构化数据略有差异。
+    """
     holdings = get_person_holdings(name)
     if not holdings:
         abort(404)
+    # 该持有人是否自然人：全部记录 is_natural=1 才视为自然人，否则机构
+    is_natural = all((h.get("is_natural") or 0) == 1 for h in holdings)
     # 去重市值：每只转债仅取最新报告期持仓，避免跨期重复累加
     mv_wan, bond_count, record_count = get_person_market_value(name)
     latest = get_person_latest_holdings(name)
     # 附加每只转债的历史下修次数（供持仓汇总表展示，未采集则 None）
     for h in latest:
         h["down_revise_count"] = get_down_revise_count(h["bond_code"])
-    return render_template("person.html", name=name, holdings=holdings,
+    return render_template("holder.html", name=name, holdings=holdings,
+                           is_natural=is_natural,
                            bond_count=bond_count, record_count=record_count,
                            mv_wan=mv_wan, latest=latest)
+
+
+@app.route("/holder/<name>")
+def holder(name):
+    return holder_view(name)
+
+
+@app.route("/person/<name>")
+def person(name):
+    # 兼容旧链接 / SEO：自然人持有人统一走 /holder/<name> 视图
+    return holder_view(name)
+
+
+@app.route("/bonds")
+def bonds_list():
+    """已采集可转债列表 + 检索（编号/名称、退市状态、下修次数、排序）。"""
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    if page < 1:
+        page = 1
+    code = request.args.get("code", "").strip()
+    delisted = request.args.get("delisted", "all")
+    if delisted not in ("all", "delisted", "active"):
+        delisted = "all"
+    has_down = request.args.get("has_down", "all")
+    if has_down not in ("all", "yes", "no"):
+        has_down = "all"
+    sort = request.args.get("sort", "code")
+    if sort not in ("code", "down", "updated", "holder", "expire"):
+        sort = "code"
+    try:
+        down_min = int(request.args.get("down_min", "").strip())
+    except (ValueError, TypeError):
+        down_min = None
+    page_size = 50
+    rows, total = search_bonds(code=code, delisted=delisted, has_down=has_down,
+                                down_min=down_min, sort=sort, page=page, page_size=page_size)
+    total_pages = (total + page_size - 1) // page_size
+    # 分页 URL：保留全部筛选参数，仅覆盖 page
+    args = dict(request.args)
+    args["page"] = page - 1
+    prev_url = ("/bonds?" + urllib.parse.urlencode(args)) if page > 1 else None
+    args["page"] = page + 1
+    next_url = ("/bonds?" + urllib.parse.urlencode(args)) if page < total_pages else None
+    return render_template("bonds.html", rows=rows, total=total, page=page,
+                           total_pages=total_pages, code=code, delisted=delisted,
+                           has_down=has_down, down_min=(down_min if down_min is not None else ""),
+                           sort=sort, prev_url=prev_url, next_url=next_url)
+
+
+@app.route("/institutions")
+def institutions():
+    """机构持有人完整榜单（服务端渲染，分页）。"""
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    if page < 1:
+        page = 1
+    page_size = 50
+    rows = get_all_institutions(limit=page_size, offset=(page - 1) * page_size)
+    total = count_institutions()
+    total_pages = (total + page_size - 1) // page_size
+    return render_template("institutions.html", persons=rows, page=page,
+                           total_pages=total_pages, total=total)
 
 
 @app.route("/bond/<code>")
@@ -462,32 +538,10 @@ def api_bond_holders(code):
 
 @app.route("/xiuxie/<code>")
 def xiuxie_detail(code):
-    """历史下修记录独立专题页（SEO 优化）：独立 URL、结构化数据、FAQ、语义化标签。
-
-    转债详情页 /bond/<code> 仅保留下修统计卡 + 「查看完整历史下修记录」链接，
-    完整明细表放在本页，避免两页重复内容导致收录分散。
+    """历史下修记录已合并展示在转债详情页 /bond/<code>（完整明细表 + FAQ），
+    此处 301 重定向到详情页，保留旧链接与已收录入口的权重，避免重复内容。
     """
-    real = resolve_query(code)
-    if not real:
-        abort(404)
-    code = real
-    bond = get_bond(code)
-    if not bond:
-        abort(404)
-    # ---- 历史下修数据：缓存优先 ----
-    count, records, dr_updated = get_down_revise(code)
-    if count is None:
-        try:
-            c, recs = crawler.fetch_down_revise(code)
-            save_down_revise(code, c, recs)
-            count, records, dr_updated = c, recs, None
-        except Exception:
-            count, records = 0, []
-    latest = records[0] if records else None
-    return render_template("xiuxie.html", bond=bond, code=code,
-                           down_count=count, down_records=records,
-                           dr_updated=dr_updated,
-                           latest_down_revise=latest)
+    return redirect(url_for("bond_detail", code=code), code=301)
 
 
 @app.route("/robots.txt")
@@ -499,22 +553,16 @@ def robots():
 @app.route("/sitemap.xml")
 def sitemap():
     base = request.host_url.rstrip("/")
-    urls = [base + "/", base + "/persons"]
+    urls = [base + "/", base + "/bonds", base + "/persons", base + "/institutions"]
     for p in get_all_natural_persons(limit=5000, offset=0):
         urls.append(base + "/person/" + urllib.parse.quote(p["holder_name"]))
+    for p in get_all_institutions(limit=5000, offset=0):
+        urls.append(base + "/holder/" + urllib.parse.quote(p["holder_name"]))
     # 可转债详情页：搜索落地页，全部收录（SEO）
     for b in list_market_bonds():
         code = b.get("bond_code")
         if code:
             urls.append(base + "/bond/" + code)
-    # 有下修记录的转债：独立专题页纳入收录
-    for b in list_market_bonds():
-        cnt = b.get("down_revise_count")
-        try:
-            if cnt and int(cnt) > 0:
-                urls.append(base + "/xiuxie/" + b["bond_code"])
-        except (ValueError, TypeError):
-            pass
     xml = ('<?xml version="1.0" encoding="UTF-8"?>\n'
            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n')
     for u in urls:
@@ -551,13 +599,23 @@ def admin():
     return render_template("admin.html", bonds=bonds, market=market)
 
 
+def _is_frozen(code):
+    """退市且已有持有人数据 -> 冻结，不再更新（符合『采集后不再更新退市债』规则）。
+
+    退市但从未采集过的债，仍允许首次采集。
+    """
+    b = get_bond(code)
+    if not (b and b.get("is_delisted")):
+        return False
+    return len(get_periods_info(code)) > 0
+
+
 @app.route("/admin/update/<code>", methods=["POST"])
 def admin_update(code):
     if not is_admin():
         return jsonify({"ok": False, "message": "未登录"}), 401
-    bond = get_bond(code)
-    if bond and bond.get("is_delisted"):
-        return jsonify({"ok": False, "locked": True, "message": "该转债已退市，不再更新数据"})
+    if _is_frozen(code):
+        return jsonify({"ok": False, "locked": True, "message": "该转债已退市且已有数据，不再更新"})
     try:
         res = crawler.crawl_bond(code)
     except Exception as e:
@@ -569,14 +627,25 @@ def admin_update(code):
 def admin_update_all():
     if not is_admin():
         return jsonify({"ok": False, "message": "未登录"}), 401
+    # 是否忽略已退市可转债（管理后台开关，默认忽略）
+    ignore = request.form.get("ignore_delisted", "1") == "1"
     from db import get_conn
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT bond_code FROM bonds WHERE bond_code IN (SELECT DISTINCT bond_code FROM holders) AND COALESCE(is_delisted,0)=0")
+    sql = ("SELECT bond_code FROM bonds WHERE bond_code IN "
+           "(SELECT DISTINCT bond_code FROM holders)")
+    if ignore:
+        sql += " AND COALESCE(is_delisted,0)=0"
+    cur.execute(sql)
     codes = [r[0] for r in cur.fetchall()]
     conn.close()
     results = []
     for c in codes:
+        # 不忽略时，退市且已有数据的债仍按冻结规则跳过（避免无效请求）
+        if not ignore and _is_frozen(c):
+            results.append({"code": c, "ok": False, "skipped": True,
+                            "message": "已退市且已有数据，跳过"})
+            continue
         try:
             res = crawler.crawl_bond(c)
             results.append({"code": c, "ok": res.get("ok"), "message": res.get("message")})
@@ -592,9 +661,21 @@ def admin_add():
     code = (request.form.get("code") or "").strip()
     if not code:
         return jsonify({"ok": False, "message": "请输入转债代码"}), 400
+    # 是否忽略已退市可转债（管理后台开关，默认忽略）
+    ignore = request.form.get("ignore_delisted", "1") == "1"
     bond = get_bond(code)
-    if bond and bond.get("is_delisted"):
-        return jsonify({"ok": False, "locked": True, "message": "该转债已退市，不再更新数据"})
+    if ignore:
+        delisted = bool(bond and bond.get("is_delisted"))
+        # 库里没有记录的新代码，做一次轻量预检判断是否退市
+        if not delisted and not bond:
+            basic = crawler.fetch_bond_basic(code)
+            delisted = bool(basic and basic.get("is_delisted"))
+        if delisted:
+            return jsonify({"ok": False, "skipped": True,
+                            "message": "该转债已退市，已忽略采集"})
+    if bond and bond.get("is_delisted") and len(get_periods_info(code)) > 0:
+        return jsonify({"ok": False, "locked": True,
+                        "message": "该转债已退市且已有数据，不再更新"})
     try:
         res = crawler.crawl_bond(code)
     except Exception as e:

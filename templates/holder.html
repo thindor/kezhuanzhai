@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ name }} 持有的可转债 - 可转债持有人信息</title>
+<meta name="description" content="{{ name }} 出现在可转债十大持有人中，共持有 {{ bond_count }} 只可转债。查看其全部持仓明细：转债代码、名称、报告期、持有量与比例。">
+<meta name="keywords" content="{{ name }},持有人,持有的可转债,十大持有人">
+<link rel="stylesheet" href="/static/style.css?v=8">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "{{ 'Person' if is_natural else 'Organization' }}",
+  "name": "{{ name }}",
+  "description": "出现在可转债十大持有人中的{{ '自然人' if is_natural else '机构' }}，共持有 {{ bond_count }} 只可转债"
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {"@type": "ListItem", "position": 1, "name": "首页", "item": "{{ url_for('index', _external=True) }}"},
+    {"@type": "ListItem", "position": 2, "name": "{{ '自然人持有人' if is_natural else '机构持有人' }}", "item": "{{ url_for('persons', _external=True) if is_natural else url_for('institutions', _external=True) }}"},
+    {"@type": "ListItem", "position": 3, "name": "{{ name }}"}
+  ]
+}
+</script>
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <a class="brand" href="/">可转债持有人信息</a>
+    <nav>
+      <a href="/">首页</a>
+      <a href="/bonds">全部转债</a>
+      <a href="/persons">牛散榜</a>
+      <a href="/institutions">机构榜</a>
+      <a href="/admin">管理后台</a>
+    </nav>
+  </header>
+
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">
+      <svg class="home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      首页
+    </a>
+    <a href="{{ url_for('persons') if is_natural else url_for('institutions') }}">{{ '自然人榜单' if is_natural else '机构榜单' }}</a>
+    <span class="current">{{ name }}</span>
+  </nav>
+
+  <div class="person-head">
+    <div class="person-avatar">{{ name[0] }}</div>
+    <div>
+      <h2>{{ name }}</h2>
+      <p class="sub">{{ '自然人持有人' if is_natural else '机构持有人（基金 / 一般机构）' }} · 出现在可转债十大持有人中</p>
+    </div>
+  </div>
+
+  <div class="stat-cards">
+    <div class="stat"><div class="num blue">{{ bond_count }}</div><div class="label">持有转债（只）</div></div>
+    <div class="stat"><div class="num">{{ record_count }}</div><div class="label">历史出现（次）</div></div>
+    <div class="stat"><div class="num green">{{ '%.1f'|format(mv_wan) }}</div><div class="label">估算市值（万元）</div></div>
+  </div>
+
+  <section class="panel">
+    <div class="section-head">
+      <h3>📊 去重后持仓汇总</h3>
+      <span class="hint">同一只转债跨多个报告期只取最新一期，不重复累加；市值 = 持有量(万张) × 现价(元/张)，现价缺失按 100 元计</span>
+    </div>
+    <div class="table-wrap">
+      <table class="rank">
+        <thead>
+          <tr>
+            <th>转债代码</th>
+            <th>转债名称</th>
+            <th>正股</th>
+            <th>最新报告期</th>
+            <th>历史期数</th>
+            <th>下修</th>
+            <th>持有量(万张)</th>
+            <th>现价(元)</th>
+            <th>估算市值(万元)</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for h in latest %}
+          <tr>
+            <td><a class="link" href="/?code={{ h.bond_code }}">{{ h.bond_code }}</a></td>
+            <td><a class="nm" href="/?code={{ h.bond_code }}">{{ h.bond_name or '-' }}</a>{% if h.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}</td>
+            <td>{{ h.stock_name or '-' }}</td>
+            <td>{{ h.report_period or '-' }}</td>
+            <td>{{ h.periods_count }} 期</td>
+            <td>{% if h.down_revise_count %}<a class="down-badge" href="/bond/{{ h.bond_code }}">{{ h.down_revise_count }} 次</a>{% else %}-{% endif %}</td>
+            <td>{{ h.hold_amount }}</td>
+            <td>{{ '%.2f'|format(h.current_price) }}</td>
+            <td class="mv">{{ '%.1f'|format(h.mv_wan) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="8" style="text-align:right;font-weight:600">合计（去重后）</td>
+            <td class="mv" style="font-weight:700">{{ '%.1f'|format(mv_wan) }}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <h3>📜 历史持仓明细</h3>
+      <span class="hint">该{{ '自然人' if is_natural else '机构' }}在各报告期上榜的原始记录，同一只转债可能出现多次</span>
+    </div>
+    <div class="table-wrap">
+      <table class="rank">
+        <thead>
+          <tr>
+            <th>转债代码</th>
+            <th>转债名称</th>
+            <th>正股</th>
+            <th>报告期</th>
+            <th>排名</th>
+            <th>性质</th>
+            <th>持有量(万张)</th>
+            <th>比例</th>
+            <th>评级</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for h in holdings %}
+          {% set ncls = {'基金':'fund','个人':'natural','一般机构':'org'}.get(h.holder_nature, 'unknown') %}
+          <tr class="{% if h.is_natural %}natural{% endif %}">
+            <td><a class="link" href="/?code={{ h.bond_code }}">{{ h.bond_code }}</a></td>
+            <td><a class="nm" href="/?code={{ h.bond_code }}">{{ h.bond_name or '-' }}</a>{% if h.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}</td>
+            <td>{{ h.stock_name or '-' }}</td>
+            <td>{{ h.report_period or '-' }}</td>
+            <td>{{ h.rank }}</td>
+            <td><span class="nature-tag {{ ncls }}">{{ h.holder_nature or '未知' }}</span></td>
+            <td>{{ h.hold_amount }}</td>
+            <td>{{ h.hold_ratio }}%</td>
+            <td>{{ h.rating or '-' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+</body>
+</html>

@@ -13,6 +13,13 @@
     <a class="link" href="/admin/logout">退出登录</a>
   </header>
 
+  <div class="admin-opt">
+    <label>
+      <input type="checkbox" id="ignoreDelisted" checked>
+      采集数据时忽略已退市可转债（勾选后，已退市的转债不会被采集 / 更新）
+    </label>
+  </div>
+
   <!-- 区块1：已收录转债（已抓取持有人） -->
   <div class="panel">
     <div class="panel-head">
@@ -142,6 +149,7 @@ function renderMarket(){
     const rating = m.rating || '-';
     const dot = st === 'done' ? '<span class="dot done"></span>已采集' : '<span class="dot todo"></span>未采集';
     const delistBadge = (m.is_delisted) ? '<span class="delist-badge">已退市</span> ' : '';
+    const mFrozen = (m.is_delisted && (m.holder_count > 0));
     html += '<tr data-code="' + m.bond_code + '">'
       + '<td><input type="checkbox" class="rowchk" data-code="' + m.bond_code + '" ' + checked + ' onchange="onRowCheck(this)"></td>'
       + '<td>' + m.bond_code + '</td>'
@@ -151,7 +159,7 @@ function renderMarket(){
       + '<td>' + (m.down_revise_count ? '<a class="down-badge" href="/bond/' + m.bond_code + '">' + m.down_revise_count + ' 次</a>' : '-') + '</td>'
       + '<td>' + price + '</td>'
       + '<td>' + delistBadge + dot + '</td>'
-      + '<td class="ops">' + (m.is_delisted ? '<button disabled title="已退市，数据冻结">更新</button>' : '<button onclick="updateOneMarket(\'' + m.bond_code + '\')">更新</button>')
+      + '<td class="ops">' + (mFrozen ? '<button disabled title="已退市且已有数据，冻结">更新</button>' : '<button onclick="updateOneMarket(\'' + m.bond_code + '\')">更新</button>')
       + '<button class="ghost" onclick="toggleDelisted(\'' + m.bond_code + '\', ' + (m.is_delisted ? 0 : 1) + ')">' + (m.is_delisted ? '恢复' : '退市') + '</button>'
       + '<a href="/bond/' + m.bond_code + '">查看</a></td></tr>';
   }
@@ -222,6 +230,7 @@ function renderCollected(){
   const body = document.getElementById('collectedBody');
   let html = '';
   for(const b of rows){
+    const bFrozen = (b.is_delisted && (b.holder_count > 0));
     html += '<tr>'
       + '<td>' + b.bond_code + '</td>'
       + '<td>' + (b.bond_name || '-') + (b.is_delisted ? ' <span class="delist-badge">已退市</span>' : '') + '</td>'
@@ -230,7 +239,7 @@ function renderCollected(){
       + '<td>' + (b.natural_count || 0) + '</td>'
       + '<td>' + (b.down_revise_count ? '<a class="down-badge" href="/bond/' + b.bond_code + '">' + b.down_revise_count + ' 次</a>' : '-') + '</td>'
       + '<td>' + (b.updated_at || '-') + '</td>'
-      + '<td class="ops">' + (b.is_delisted ? '<button disabled title="已退市，数据冻结">更新</button>' : '<button onclick="updateOne(\'' + b.bond_code + '\')">更新</button>')
+      + '<td class="ops">' + (bFrozen ? '<button disabled title="已退市且已有数据，冻结">更新</button>' : '<button onclick="updateOne(\'' + b.bond_code + '\')">更新</button>')
       + '<button class="danger" onclick="delOne(\'' + b.bond_code + '\')">删除</button>'
       + '<a href="/bond/' + b.bond_code + '">查看</a></td></tr>';
   }
@@ -253,9 +262,14 @@ async function updateOneMarket(code){
   renderMarket();
 }
 
+function ignoreDelisted(){
+  const el = document.getElementById('ignoreDelisted');
+  return el ? el.checked : true;
+}
 async function batchUpdate(){
-  // 跳过退市债（其数据已冻结，更新无意义且后端会拒绝）
+  // 若勾选「忽略已退市」，则批量更新时排除退市债；否则全部纳入（退市且已有数据的仍会被后端冻结跳过）
   const codes = [...selSet].filter(c => {
+    if(!ignoreDelisted()) return true;
     const m = MARKET.find(x => x.bond_code === c);
     return !(m && m.is_delisted);
   });
@@ -296,7 +310,8 @@ async function addBond(e){
   const code = document.getElementById('addCode').value.trim();
   if(!code){ return false; }
   setStatus('新增 / 更新中...');
-  const r = await fetch('/admin/add', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'code=' + encodeURIComponent(code)});
+  const body = 'code=' + encodeURIComponent(code) + '&ignore_delisted=' + (ignoreDelisted()?1:0);
+  const r = await fetch('/admin/add', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body});
   const d = await r.json();
   setStatus(d.ok ? ('成功：' + (d.message||'')) : ('失败：' + (d.message||'')));
   if(d.ok) setTimeout(()=>location.reload(), 800);
@@ -312,7 +327,7 @@ async function updateOne(code){
 async function updateAll(){
   if(!confirm('确认批量更新全部已收录转债？（会逐个重新爬取）')) return;
   setStatus('批量更新中...');
-  const r = await fetch('/admin/update_all', {method:'POST'});
+  const r = await fetch('/admin/update_all?ignore_delisted=' + (ignoreDelisted()?1:0), {method:'POST'});
   const d = await r.json();
   setStatus('批量更新完成：共 ' + d.total + ' 只');
 }

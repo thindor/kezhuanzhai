@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>可转债机构持有人榜单 - 可转债持有人信息</title>
+<meta name="description" content="出现在可转债十大持有人中的机构（基金 / 一般机构）持有人完整榜单，按持仓估算市值排序。点击查看每家机构持有的全部可转债。">
+<meta name="keywords" content="可转债,机构持有人,基金持仓,机构榜,转债代码,持仓市值">
+<link rel="canonical" href="{{ request.url_root }}institutions">
+<meta name="robots" content="index,follow">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <a class="brand" href="/">可转债持有人信息</a>
+    <nav>
+      <a href="/">首页</a>
+      <a href="/bonds">全部转债</a>
+      <a href="/persons">牛散榜</a>
+      <a href="/institutions">机构榜</a>
+      <a href="/admin">管理后台</a>
+    </nav>
+  </header>
+
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">
+      <svg class="home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      首页
+    </a>
+    <span class="current">机构持有人榜单</span>
+  </nav>
+
+  <div class="page-head">
+    <h2>🏦 可转债机构持有人榜单</h2>
+    <p class="sub">共 <strong>{{ total }}</strong> 家机构持有人（基金 / 一般机构）· 按持仓估算市值降序</p>
+  </div>
+
+  {% if persons %}
+  <table class="rank">
+    <thead>
+      <tr>
+        <th style="width:52px">#</th>
+        <th>机构持有人</th>
+        <th>持仓市值(估算)</th>
+        <th>持有转债</th>
+        <th>出现次数</th>
+        <th>代表持仓</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in persons %}
+      <tr>
+        <td><span class="rk {% if (loop.index + (page-1)*50) <= 3 %}top{% endif %}">{{ loop.index + (page-1)*50 }}</span></td>
+        <td><a class="nm" href="{{ url_for('holder', name=p.holder_name) }}">{{ p.holder_name }}</a></td>
+        <td class="mv">{{ '%.2f 亿'|format(p.mv_wan/10000) if p.mv_wan >= 10000 else '%.1f 万'|format(p.mv_wan) }}</td>
+        <td>{{ p.bond_count }} 只</td>
+        <td>{{ p.record_count }} 次</td>
+        <td class="top-bonds">{{ p.top_bonds | map(attribute='bond_name') | join('、') }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">暂无机构持有人数据，请先在管理后台添加转债。</p>
+  {% endif %}
+
+  {% if total_pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}<a class="pg" href="/institutions?page={{ page-1 }}">← 上一页</a>{% endif %}
+    <span class="pg-cur">第 {{ page }} / {{ total_pages }} 页</span>
+    {% if page < total_pages %}<a class="pg" href="/institutions?page={{ page+1 }}">下一页 →</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+</body>
+</html>

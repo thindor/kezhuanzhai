@@ -134,7 +134,9 @@
   <a class="brand" href="/">可转债持有人信息</a>
   <nav>
     <a href="/">首页</a>
+    <a href="/bonds">全部转债</a>
     <a href="/persons">牛散榜</a>
+    <a href="/institutions">机构榜</a>
     <a href="/admin">管理后台</a>
   </nav>
 </header>
@@ -165,6 +167,17 @@
     <span class="hint">暂无检索记录，搜索一只可转债试试～</span>
     {% endfor %}
   </div>
+  </section>
+
+<section class="entry-panel">
+  <a class="entry-card" href="/bonds">
+    <span class="ec-icon">📇</span>
+    <span class="ec-text">
+      <strong>查看全部已采集可转债</strong>
+      <small>按代码 / 名称、退市状态、历史下修次数筛选与检索</small>
+    </span>
+    <span class="ec-arrow">→</span>
+  </a>
 </section>
 
 <div id="result"></div>
@@ -183,7 +196,7 @@
     {% for r in ranking %}
       <tr>
         <td><span class="rk {% if loop.index <= 3 %}top{% endif %}">{{ loop.index }}</span></td>
-        <td><a class="nm" href="{{ url_for('person', name=r.holder_name) }}">{{ r.holder_name }}</a></td>
+        <td><a class="nm" href="{{ url_for('holder', name=r.holder_name) }}">{{ r.holder_name }}</a></td>
         <td class="mv">{{ '%.2f 亿'|format(r.mv_wan/10000) if r.mv_wan >= 10000 else '%.1f 万'|format(r.mv_wan) }}</td>
         <td>{{ r.bond_count }} 只</td>
         <td>{{ r.record_count }} 次</td>
@@ -196,6 +209,35 @@
   <p class="hint">暂无自然人数据，请先在管理后台添加转债。</p>
   {% endif %}
   <a class="more" href="{{ url_for('persons') }}">查看全部自然人持有人 →</a>
+</section>
+
+<section class="rank-panel">
+  <div class="rank-head">
+    <h2>🏦 可转债机构榜</h2>
+    <span class="hint">机构(基金 / 一般机构)按持仓市值估算降序 · Top {{ inst_ranking|length }}</span>
+  </div>
+  {% if inst_ranking %}
+  <table class="rank">
+    <thead>
+      <tr><th style="width:46px">#</th><th>机构持有人</th><th>持仓市值(估算)</th><th>持有转债</th><th>出现次数</th><th>代表持仓</th></tr>
+    </thead>
+    <tbody>
+    {% for r in inst_ranking %}
+      <tr>
+        <td><span class="rk {% if loop.index <= 3 %}top{% endif %}">{{ loop.index }}</span></td>
+        <td><a class="nm" href="{{ url_for('holder', name=r.holder_name) }}">{{ r.holder_name }}</a></td>
+        <td class="mv">{{ '%.2f 亿'|format(r.mv_wan/10000) if r.mv_wan >= 10000 else '%.1f 万'|format(r.mv_wan) }}</td>
+        <td>{{ r.bond_count }} 只</td>
+        <td>{{ r.record_count }} 次</td>
+        <td class="top-bonds">{{ r.top_bonds | map(attribute='bond_name') | join('、') }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">暂无机构持有人数据，请先在管理后台添加转债。</p>
+  {% endif %}
+  <a class="more" href="/institutions">查看全部机构持有人 →</a>
 </section>
 
 <script>

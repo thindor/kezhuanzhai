@@ -14,7 +14,9 @@
     <a class="brand" href="/">可转债持有人信息</a>
     <nav>
       <a href="/">首页</a>
+      <a href="/bonds">全部转债</a>
       <a href="{{ url_for('persons') }}">牛散榜</a>
+      <a href="/institutions">机构榜</a>
       <a href="/admin">管理后台</a>
     </nav>
   </header>
@@ -42,11 +44,11 @@
       {% for p in persons %}
         <tr>
           <td><span class="rk {% if (loop.index + (page-1)*50) <= 3 %}top{% endif %}">{{ loop.index + (page-1)*50 }}</span></td>
-          <td><a class="nm" href="{{ url_for('person', name=p.holder_name) }}">{{ p.holder_name }}</a></td>
+          <td><a class="nm" href="{{ url_for('holder', name=p.holder_name) }}">{{ p.holder_name }}</a></td>
           <td>{{ p.bond_count }} 只</td>
           <td><b>{{ '%.2f'|format(p.mv_wan) if p.mv_wan is not none else '-' }}</b></td>
           <td>{{ p.record_count }} 次</td>
-          <td style="text-align:right"><a class="link" href="{{ url_for('person', name=p.holder_name) }}">查看持仓 →</a></td>
+          <td style="text-align:right"><a class="link" href="{{ url_for('holder', name=p.holder_name) }}">查看持仓 →</a></td>
         </tr>
       {% endfor %}
       </tbody>
