@@ -18,7 +18,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from config import EM_BASE, EM_HEADERS, THS_BASE
-from db import upsert_bond, delete_holders, insert_holders
+from db import upsert_bond, delete_holders, insert_holders, compute_delist
 
 
 def _now():
@@ -54,6 +54,7 @@ def fetch_bond_basic(code):
         return None
     if d.get("success") and d.get("result") and d["result"].get("data"):
         row = d["result"]["data"][0]
+        is_delisted, delist_date = compute_delist(row)
         return {
             "bond_code": code,
             "bond_name": row.get("SECURITY_NAME_ABBR"),
@@ -64,6 +65,8 @@ def fetch_bond_basic(code):
             "listing_date": (row.get("LISTING_DATE") or "")[:10],
             "expire_date": (row.get("EXPIRE_DATE") or "")[:10],
             "current_transfer_price": row.get("TRANSFER_PRICE"),
+            "is_delisted": is_delisted,
+            "delist_date": delist_date,
             "data_source": "东方财富数据中心",
         }
     return None
@@ -296,6 +299,7 @@ def crawl_bond(code):
             "bond_code": core, "bond_name": None, "stock_code": None, "stock_name": None,
             "rating": None, "issue_scale": None, "listing_date": None, "expire_date": None,
             "current_transfer_price": None, "current_price": price,
+            "is_delisted": 0, "delist_date": None,
             "data_source": "东方财富数据中心",
             "created_at": now, "updated_at": now,
         })

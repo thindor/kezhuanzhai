@@ -33,3 +33,8 @@ docs/superpowers/
 
 # ---- 本地环境变量（如含密钥请勿入库）----
 .env
+
+# ---- 临时探查 / 调试脚本（本地验证用，不入库）----
+_probe_*.py
+_probe_out.txt
+tmp_*.py

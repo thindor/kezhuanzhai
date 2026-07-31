@@ -49,14 +49,22 @@
   </nav>
 
   <div class="bond-head">
-    <h2>{{ bond.bond_name or '未知转债' }} <span class="code">{{ code }}</span></h2>
+    <h2>{{ bond.bond_name or '未知转债' }} <span class="code">{{ code }}</span>{% if bond.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}</h2>
     <p class="sub">正股：{{ bond.stock_name or '-' }}（{{ bond.stock_code or '-' }}）· 评级：{{ bond.rating or '-' }} · 数据来源：{{ bond.data_source or '东方财富' }}</p>
   </div>
 
+  {% if bond.is_delisted %}
+  <div class="delist-banner">
+    🚫 该可转债已退市{% if bond.delist_date %}（{{ bond.delist_date }}）{% endif %}，历史持有人数据仅供查阅，已冻结不再更新。
+  </div>
+  {% endif %}
+
+  {% if not bond.is_delisted %}
   <div class="update-bar" id="updateBar" style="display:none">
     <span class="upd-info" id="updInfo"></span>
     <button class="update-btn" id="updateBtn" onclick="refreshBond()">🔄 更新数据</button>
   </div>
+  {% endif %}
 
   <div class="info-cards">
     <div class="info"><div class="num">{{ '%.2f'|format(bond.current_price) if bond.current_price else '-' }}</div><div class="label">现价(元)</div></div>
@@ -89,14 +97,22 @@
 
   <section class="panel">
     <div class="section-head">
-      <h3>📋 最新一期十大持有人{% if latest_period %}（{{ latest_period }}）{% endif %}</h3>
+      <h3 class="holders-title">📋 十大持有人{% if current_period %}（{{ current_period }}）{% endif %}</h3>
       <span class="hint">数据来源：东方财富数据中心；自然人可点击查看其全部持仓</span>
     </div>
+    {% if periods and periods|length > 1 %}
+    <div class="period-tabs" id="periodTabs">
+      {% for p in periods %}
+        <a class="ptab {% if p.period == current_period %}active{% endif %}" href="?period={{ p.period }}" data-period="{{ p.period }}" title="该期共 {{ p.cnt }} 条持有人记录">{{ p.period }}{% if p.period == current_period %} <span class="pt-cur">当前</span>{% endif %}</a>
+      {% endfor %}
+    </div>
+    <p class="period-note">共 {{ periods|length }} 个报告期，点击切换查看各期十大持有人；当前显示 <b>{{ current_period }}</b> 期（共 {{ periods|selectattr('period', 'equalto', current_period)|map(attribute='cnt')|list|first }} 条）。</p>
+    {% endif %}
     <div class="table-wrap">
       {% if holders %}
       <table class="rank">
         <thead><tr><th>排名</th><th>持有人</th><th>性质</th><th>持有量(万张)</th><th>比例</th></tr></thead>
-        <tbody>
+        <tbody id="holdersBody">
         {% for h in holders %}
           {% set ncls = {'基金':'fund','个人':'natural','一般机构':'org'}.get(h.holder_nature, 'unknown') %}
           <tr class="{% if h.is_natural %}natural{% endif %}">
@@ -115,9 +131,12 @@
     </div>
   </section>
 </div>
-<script>
+  <script>
+  // 退市债历史数据已冻结，不提供更新按钮（updateBar 不渲染）
+  var DELISTED = {% if bond.is_delisted %}true{% else %}false{% endif %};
   // 更新时间非今日（北京时间）则显示更新按钮
   (function(){
+    if(DELISTED) return;
     var upd = "{{ bond.updated_at or '' }}";
     var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
     var bar = document.getElementById('updateBar');
@@ -139,6 +158,50 @@
       })
       .catch(function(e){ btn.disabled = false; btn.textContent = '更新失败，点击重试'; alert('请求出错：' + e.message); });
   }
+  // ---- 切换报告期：优先无刷新加载，失败回退到链接跳转 ----
+  document.querySelectorAll('#periodTabs .ptab').forEach(function(a){
+    a.addEventListener('click', function(e){
+      e.preventDefault();
+      var period = a.getAttribute('data-period');
+      fetch('/api/bond/' + encodeURIComponent("{{ code }}") + '/holders?period=' + encodeURIComponent(period))
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if(d && d.ok){ renderHolders(d.period, d.holders); history.replaceState(null, '', '?period=' + period); }
+          else { location.href = '?period=' + period; }
+        })
+        .catch(function(){ location.href = '?period=' + period; });
+    });
+  });
+  function renderHolders(period, holders){
+    document.querySelectorAll('#periodTabs .ptab').forEach(function(x){
+      var active = x.getAttribute('data-period') === period;
+      x.classList.toggle('active', active);
+      var cur = x.querySelector('.pt-cur');
+      if(active && !cur){ var s = document.createElement('span'); s.className = 'pt-cur'; s.textContent = '当前'; x.appendChild(document.createTextNode(' ')); x.appendChild(s); }
+      if(!active && cur){ cur.remove(); }
+    });
+    var title = document.querySelector('.holders-title');
+    if(title) title.textContent = '📋 十大持有人（' + period + '）';
+    var body = document.getElementById('holdersBody');
+    if(!body) return;
+    if(!holders || !holders.length){ body.innerHTML = '<tr><td colspan="5" class="empty">该期暂无持有人数据。</td></tr>'; return; }
+    var rows = '';
+    holders.forEach(function(h){
+      var ncls = ({'基金':'fund','个人':'natural','一般机构':'org'}[h.holder_nature] || 'unknown');
+      var nameCell = h.is_natural
+        ? '<a class="nm" href="/person/' + encodeURIComponent(h.holder_name) + '">' + esc(h.holder_name) + '</a>'
+        : esc(h.holder_name);
+      rows += '<tr class="' + (h.is_natural ? 'natural' : '') + '">'
+        + '<td>' + h.rank + '</td>'
+        + '<td>' + nameCell + '</td>'
+        + '<td><span class="nature-tag ' + ncls + '">' + (h.holder_nature || '未知') + '</span></td>'
+        + '<td>' + h.hold_amount + '</td>'
+        + '<td>' + h.hold_ratio + '%</td>'
+        + '</tr>';
+    });
+    body.innerHTML = rows;
+  }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 </script>
 </body>
 </html>

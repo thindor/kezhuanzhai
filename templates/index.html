@@ -159,6 +159,7 @@
     <a class="recent-chip" href="/bond/{{ b.bond_code }}">
       <span class="rc-name">{{ b.bond_name or b.bond_code }}</span>
       <span class="rc-code">{{ b.bond_code }}</span>
+      {% if b.is_delisted %}<span class="delist-badge">已退市</span>{% endif %}
     </a>
     {% else %}
     <span class="hint">暂无检索记录，搜索一只可转债试试～</span>

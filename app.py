@@ -25,12 +25,13 @@ import urllib.parse
 from datetime import datetime
 
 from config import ADMIN_USER, ADMIN_PASS, SECRET_KEY, CACHE_TTL_DAYS
-from db import (init_db, get_bond, get_periods, get_holders, list_bonds,
+from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, list_bonds,
                 list_market_bonds,
                 get_all_natural_persons, count_natural_persons, get_person_holdings,
                 get_person_market_value, get_person_latest_holdings,
                 get_natural_ranking, get_down_revise, save_down_revise,
-                get_down_revise_count, record_bond_view, get_recent_bonds)
+                get_down_revise_count, record_bond_view, get_recent_bonds,
+                set_delisted)
 import crawler
 
 app = Flask(__name__)
@@ -294,6 +295,19 @@ def api_bond(code):
         except Exception:
             pass
 
+    # 退市债：已采集数据后不再重新抓取，仅返回历史数据（冻结）
+    if force and bond and bond.get("is_delisted"):
+        return jsonify({
+            "ok": True,
+            "bond": bond,
+            "periods": _periods_payload(code, periods) if periods else [],
+            "cached": True,
+            "source": "frozen",
+            "updated_at": bond.get("updated_at"),
+            "locked": True,
+            "message": "该转债已退市，历史数据不再更新",
+        })
+
     # ---- 缓存命中：直接返回，不触网 ----
     if bond and periods and not force:
         ts = bond.get("updated_at")
@@ -405,10 +419,13 @@ def bond_detail(code):
         except Exception:
             count, records = 0, []
 
-    # ---- 十大持有人（最新一期） ----
-    periods = get_periods(code)
+    # ---- 十大持有人（支持按报告期切换） ----
+    periods_info = get_periods_info(code)
+    periods = [p["period"] for p in periods_info]
     latest_period = periods[0] if periods else None
-    holders = get_holders(code, latest_period) if latest_period else []
+    req_period = request.args.get("period")
+    current_period = req_period if req_period in periods else latest_period
+    holders = get_holders(code, current_period) if current_period else []
     natural_holders = [h for h in holders if h.get("is_natural")]
 
     # 最近一次下修提议（股东大会审议）日：records 已按最新在前
@@ -418,9 +435,29 @@ def bond_detail(code):
                            down_count=count, down_records=records,
                            dr_updated=dr_updated,
                            latest_period=latest_period,
+                           periods=periods_info,
+                           current_period=current_period,
                            holders=holders,
                            natural_holders=natural_holders,
                            latest_down_revise=latest_down_revise)
+
+
+@app.route("/api/bond/<code>/holders")
+def api_bond_holders(code):
+    """按报告期返回十大持有人 JSON，供详情页无刷新切换期数。"""
+    real = resolve_query(code)
+    if not real:
+        return jsonify({"ok": False, "message": "未找到该转债"}), 404
+    code = real
+    periods_info = get_periods_info(code)
+    periods = [p["period"] for p in periods_info]
+    if not periods:
+        return jsonify({"ok": True, "period": None, "periods": [], "holders": []})
+    req_period = request.args.get("period")
+    current_period = req_period if req_period in periods else periods[0]
+    holders = get_holders(code, current_period)
+    return jsonify({"ok": True, "period": current_period,
+                    "periods": periods_info, "holders": holders})
 
 
 @app.route("/xiuxie/<code>")
@@ -518,6 +555,9 @@ def admin():
 def admin_update(code):
     if not is_admin():
         return jsonify({"ok": False, "message": "未登录"}), 401
+    bond = get_bond(code)
+    if bond and bond.get("is_delisted"):
+        return jsonify({"ok": False, "locked": True, "message": "该转债已退市，不再更新数据"})
     try:
         res = crawler.crawl_bond(code)
     except Exception as e:
@@ -532,7 +572,7 @@ def admin_update_all():
     from db import get_conn
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT bond_code FROM bonds WHERE bond_code IN (SELECT DISTINCT bond_code FROM holders)")
+    cur.execute("SELECT bond_code FROM bonds WHERE bond_code IN (SELECT DISTINCT bond_code FROM holders) AND COALESCE(is_delisted,0)=0")
     codes = [r[0] for r in cur.fetchall()]
     conn.close()
     results = []
@@ -552,6 +592,9 @@ def admin_add():
     code = (request.form.get("code") or "").strip()
     if not code:
         return jsonify({"ok": False, "message": "请输入转债代码"}), 400
+    bond = get_bond(code)
+    if bond and bond.get("is_delisted"):
+        return jsonify({"ok": False, "locked": True, "message": "该转债已退市，不再更新数据"})
     try:
         res = crawler.crawl_bond(code)
     except Exception as e:
@@ -571,6 +614,23 @@ def admin_delete(code):
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/admin/delisted/<code>", methods=["POST"])
+def admin_delisted(code):
+    """手动切换某转债的退市标记（管理后台修正用）。"""
+    if not is_admin():
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    raw = request.form.get("delisted")
+    if raw is None:
+        raw = request.args.get("delisted")
+    val = 1 if str(raw) in ("1", "true", "on", "yes") else 0
+    ddate = None
+    if val == 1:
+        b = get_bond(code) or {}
+        ddate = b.get("expire_date") or b.get("delist_date")
+    set_delisted(code, val == 1, ddate)
+    return jsonify({"ok": True, "bond_code": code, "is_delisted": val})
 
 
 if __name__ == "__main__":

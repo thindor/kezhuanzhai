@@ -141,6 +141,7 @@ function renderMarket(){
     const price = (m.current_price != null) ? Number(m.current_price).toFixed(2) : '-';
     const rating = m.rating || '-';
     const dot = st === 'done' ? '<span class="dot done"></span>已采集' : '<span class="dot todo"></span>未采集';
+    const delistBadge = (m.is_delisted) ? '<span class="delist-badge">已退市</span> ' : '';
     html += '<tr data-code="' + m.bond_code + '">'
       + '<td><input type="checkbox" class="rowchk" data-code="' + m.bond_code + '" ' + checked + ' onchange="onRowCheck(this)"></td>'
       + '<td>' + m.bond_code + '</td>'
@@ -149,8 +150,9 @@ function renderMarket(){
       + '<td>' + rating + '</td>'
       + '<td>' + (m.down_revise_count ? '<a class="down-badge" href="/bond/' + m.bond_code + '">' + m.down_revise_count + ' 次</a>' : '-') + '</td>'
       + '<td>' + price + '</td>'
-      + '<td>' + dot + '</td>'
-      + '<td class="ops"><button onclick="updateOneMarket(\'' + m.bond_code + '\')">更新</button>'
+      + '<td>' + delistBadge + dot + '</td>'
+      + '<td class="ops">' + (m.is_delisted ? '<button disabled title="已退市，数据冻结">更新</button>' : '<button onclick="updateOneMarket(\'' + m.bond_code + '\')">更新</button>')
+      + '<button class="ghost" onclick="toggleDelisted(\'' + m.bond_code + '\', ' + (m.is_delisted ? 0 : 1) + ')">' + (m.is_delisted ? '恢复' : '退市') + '</button>'
       + '<a href="/bond/' + m.bond_code + '">查看</a></td></tr>';
   }
   body.innerHTML = html || '<tr><td colspan="9" style="text-align:center;color:#888">无匹配结果</td></tr>';
@@ -197,6 +199,18 @@ function markDone(code){
   if(m) m.holder_count = Math.max(m.holder_count || 0, 1);
 }
 
+async function toggleDelisted(code, val){
+  try{
+    const r = await fetch('/admin/delisted/' + code, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'delisted=' + val});
+    const d = await r.json().catch(() => ({ok:false}));
+    if(d.ok){
+      const m = MARKET.find(x => x.bond_code === code);
+      if(m) m.is_delisted = d.is_delisted;
+      renderMarket();
+    }
+  }catch(e){}
+}
+
 /* ---------- 已收录转债 ---------- */
 function renderCollected(){
   const list = COLLECTED;
@@ -210,13 +224,13 @@ function renderCollected(){
   for(const b of rows){
     html += '<tr>'
       + '<td>' + b.bond_code + '</td>'
-      + '<td>' + (b.bond_name || '-') + '</td>'
+      + '<td>' + (b.bond_name || '-') + (b.is_delisted ? ' <span class="delist-badge">已退市</span>' : '') + '</td>'
       + '<td>' + (b.stock_name || '-') + '</td>'
       + '<td>' + (b.holder_count || 0) + '</td>'
       + '<td>' + (b.natural_count || 0) + '</td>'
       + '<td>' + (b.down_revise_count ? '<a class="down-badge" href="/bond/' + b.bond_code + '">' + b.down_revise_count + ' 次</a>' : '-') + '</td>'
       + '<td>' + (b.updated_at || '-') + '</td>'
-      + '<td class="ops"><button onclick="updateOne(\'' + b.bond_code + '\')">更新</button>'
+      + '<td class="ops">' + (b.is_delisted ? '<button disabled title="已退市，数据冻结">更新</button>' : '<button onclick="updateOne(\'' + b.bond_code + '\')">更新</button>')
       + '<button class="danger" onclick="delOne(\'' + b.bond_code + '\')">删除</button>'
       + '<a href="/bond/' + b.bond_code + '">查看</a></td></tr>';
   }
@@ -240,7 +254,11 @@ async function updateOneMarket(code){
 }
 
 async function batchUpdate(){
-  const codes = [...selSet];
+  // 跳过退市债（其数据已冻结，更新无意义且后端会拒绝）
+  const codes = [...selSet].filter(c => {
+    const m = MARKET.find(x => x.bond_code === c);
+    return !(m && m.is_delisted);
+  });
   if(codes.length === 0){ setBatch('请先勾选要更新的转债'); return; }
   if(!confirm('确认批量更新选中的 ' + codes.length + ' 只转债持有人信息？\n（完成后自动标记已采集，并发 3 只）')) return;
   const CONC = 3;

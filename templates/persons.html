@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>自然人持有人榜单 - 可转债持有人信息</title>
-<meta name="description" content="出现在可转债十大持有人中的自然人（个人）持有人完整榜单，按持有转债数量排序。点击查看每个人持有的全部可转债。">
+<meta name="description" content="出现在可转债十大持有人中的自然人（个人）持有人完整榜单，按持仓估算市值降序排列。点击查看每个人持有的全部可转债及市值明细。">
 <meta name="keywords" content="自然人持有人,个人持有人,可转债牛散,十大持有人榜单">
 <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
@@ -22,18 +22,19 @@
   <section class="panel">
     <div class="panel-head">
       <h2>🧑 自然人持有人榜单</h2>
-      <span class="hint">共 <strong>{{ total }}</strong> 位自然人持有人（出现在可转债十大持有人中的个人）· 按持有转债数量排序</span>
+      <span class="hint">共 <strong>{{ total }}</strong> 位自然人持有人（出现在可转债十大持有人中的个人）· 按持仓估算市值降序</span>
     </div>
 
     {% if persons %}
+    <p class="hint" style="margin:0 0 10px">市值估算：每只转债取最新报告期持仓量 × 现价（现价缺失按面值 100 元/张），单位万元，仅供参考。</p>
     <table class="rank">
       <thead>
         <tr>
           <th style="width:52px">#</th>
           <th>持有人</th>
           <th>持有转债</th>
+          <th>估算市值(万元)</th>
           <th>出现次数</th>
-          <th>最近报告期</th>
           <th style="text-align:right">操作</th>
         </tr>
       </thead>
@@ -43,8 +44,8 @@
           <td><span class="rk {% if (loop.index + (page-1)*50) <= 3 %}top{% endif %}">{{ loop.index + (page-1)*50 }}</span></td>
           <td><a class="nm" href="{{ url_for('person', name=p.holder_name) }}">{{ p.holder_name }}</a></td>
           <td>{{ p.bond_count }} 只</td>
+          <td><b>{{ '%.2f'|format(p.mv_wan) if p.mv_wan is not none else '-' }}</b></td>
           <td>{{ p.record_count }} 次</td>
-          <td>{{ p.latest_period or '-' }}</td>
           <td style="text-align:right"><a class="link" href="{{ url_for('person', name=p.holder_name) }}">查看持仓 →</a></td>
         </tr>
       {% endfor %}

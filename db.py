@@ -66,6 +66,12 @@ def init_db():
     ]:
         if col not in bcols2:
             cur.execute("ALTER TABLE bonds ADD COLUMN %s %s" % (col, ctype))
+    # 兼容旧库：退市标记字段（is_delisted / delist_date）
+    cur.execute("PRAGMA table_info(bonds)")
+    bcols3 = [r[1] for r in cur.fetchall()]
+    for col, ctype in [("is_delisted", "INTEGER"), ("delist_date", "TEXT")]:
+        if col not in bcols3:
+            cur.execute("ALTER TABLE bonds ADD COLUMN %s %s" % (col, ctype))
     # 最近检索/浏览的转债（首页快捷入口）
     cur.execute("""
     CREATE TABLE IF NOT EXISTS recent_bonds (
@@ -76,20 +82,43 @@ def init_db():
     )""")
     conn.commit()
     conn.close()
+    # 启动即按到期日/摘牌日幂等回填退市标记（覆盖存量债券）
+    try:
+        backfill_delist_status()
+    except Exception:
+        pass
 
 
 def upsert_bond(b):
+    now = _now_str()
+    p = {
+        "bond_code": b.get("bond_code"),
+        "bond_name": b.get("bond_name"),
+        "stock_code": b.get("stock_code"),
+        "stock_name": b.get("stock_name"),
+        "rating": b.get("rating"),
+        "issue_scale": b.get("issue_scale"),
+        "listing_date": b.get("listing_date"),
+        "expire_date": b.get("expire_date"),
+        "current_transfer_price": b.get("current_transfer_price"),
+        "current_price": b.get("current_price"),
+        "data_source": b.get("data_source"),
+        "created_at": b.get("created_at", now),
+        "updated_at": b.get("updated_at", now),
+        "is_delisted": b.get("is_delisted", 0) or 0,
+        "delist_date": b.get("delist_date"),
+    }
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
     INSERT INTO bonds (
         bond_code, bond_name, stock_code, stock_name, rating, issue_scale,
         listing_date, expire_date, current_transfer_price, current_price,
-        data_source, created_at, updated_at
+        data_source, created_at, updated_at, is_delisted, delist_date
     ) VALUES (
         :bond_code, :bond_name, :stock_code, :stock_name, :rating, :issue_scale,
         :listing_date, :expire_date, :current_transfer_price, :current_price,
-        :data_source, :created_at, :updated_at
+        :data_source, :created_at, :updated_at, :is_delisted, :delist_date
     )
     ON CONFLICT(bond_code) DO UPDATE SET
         bond_name=excluded.bond_name,
@@ -102,8 +131,10 @@ def upsert_bond(b):
         current_transfer_price=excluded.current_transfer_price,
         current_price=excluded.current_price,
         data_source=excluded.data_source,
-        updated_at=excluded.updated_at
-    """, b)
+        updated_at=excluded.updated_at,
+        is_delisted=excluded.is_delisted,
+        delist_date=excluded.delist_date
+    """, p)
     conn.commit()
     conn.close()
 
@@ -152,6 +183,24 @@ def get_periods(bond_code):
     rows = [x[0] for x in cur.fetchall()]
     conn.close()
     return rows
+
+
+def get_periods_info(bond_code):
+    """返回该转债全部有持有人数据的报告期及每期持有人条数，按报告期倒序。
+
+    用于详情页期数切换入口展示（如 [2023-06-30 (10), 2022-12-31 (10)]）。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT report_period, COUNT(*) AS cnt FROM holders WHERE bond_code=? "
+        "GROUP BY report_period ORDER BY report_period DESC",
+        (bond_code,),
+    )
+    rows = [{"period": r[0], "cnt": r[1]} for r in cur.fetchall()]
+    conn.close()
+    return rows
+
 
 
 def get_holders(bond_code, period):
@@ -218,7 +267,7 @@ def list_market_bonds():
     cur = conn.cursor()
     cur.execute("""
         SELECT b.bond_code, b.bond_name, b.stock_code, b.stock_name, b.rating,
-               b.current_price, b.issue_scale, b.down_revise_count,
+               b.current_price, b.issue_scale, b.down_revise_count, b.is_delisted,
                (SELECT COUNT(*) FROM holders h WHERE h.bond_code=b.bond_code) AS holder_count,
                (SELECT MAX(report_period) FROM holders h WHERE h.bond_code=b.bond_code) AS latest_period
         FROM bonds b
@@ -239,18 +288,32 @@ def count_bonds():
 
 
 def get_all_natural_persons(limit=2000, offset=0):
-    """自然人聚合榜：去重列出自然人，含出现次数/涉及转债数/最新报告期。"""
+    """自然人聚合榜：按持仓估算市值（万元）降序排列，支持分页。
+
+    市值口径（与 get_natural_ranking / 详情页一致）：每个（自然人, 转债）取最新报告期
+    持仓，市值 = 持有量(万张) × 现价(元/张)；现价缺失按面值 100 元/张 估算。
+    """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT holder_name,
-               COUNT(*)              AS record_count,
-               COUNT(DISTINCT bond_code) AS bond_count,
-               MAX(report_period)    AS latest_period
-        FROM holders
-        WHERE is_natural = 1
-        GROUP BY holder_name
-        ORDER BY bond_count DESC, record_count DESC, holder_name
+        WITH latest AS (
+            SELECT h.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY h.holder_name, h.bond_code
+                       ORDER BY h.report_period DESC
+                   ) AS rn
+            FROM holders h
+            WHERE h.is_natural = 1
+        )
+        SELECT l.holder_name,
+               COUNT(*)                        AS record_count,
+               COUNT(DISTINCT l.bond_code)     AS bond_count,
+               ROUND(SUM(l.hold_amount * COALESCE(b.current_price, 100.0)), 2) AS mv_wan
+        FROM latest l
+        LEFT JOIN bonds b ON l.bond_code = b.bond_code
+        WHERE l.rn = 1
+        GROUP BY l.holder_name
+        ORDER BY mv_wan DESC, bond_count DESC, l.holder_name
         LIMIT ? OFFSET ?
     """, (limit, offset))
     rows = [dict(r) for r in cur.fetchall()]
@@ -272,7 +335,7 @@ def get_person_holdings(name):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT h.*, b.bond_name, b.stock_name, b.stock_code, b.rating, b.current_price
+        SELECT h.*, b.bond_name, b.stock_name, b.stock_code, b.rating, b.current_price, b.is_delisted
         FROM holders h
         LEFT JOIN bonds b ON h.bond_code = b.bond_code
         WHERE h.holder_name = ?
@@ -294,7 +357,7 @@ def get_person_latest_holdings(name):
     cur = conn.cursor()
     cur.execute("""
         SELECT h.bond_code, h.report_period, h.hold_amount,
-               b.bond_name, b.stock_name, b.current_price
+               b.bond_name, b.stock_name, b.current_price, b.is_delisted, b.delist_date
         FROM holders h
         LEFT JOIN bonds b ON h.bond_code = b.bond_code
         WHERE h.holder_name = ?
@@ -321,6 +384,8 @@ def get_person_latest_holdings(name):
             "report_period": r["report_period"] or "-",
             "hold_amount": r["hold_amount"],
             "current_price": price,
+            "is_delisted": r["is_delisted"],
+            "delist_date": r.get("delist_date"),
             "periods_count": sum(1 for x in rows if x["bond_code"] == code),
             "mv_wan": round(mv, 2),
         })
@@ -468,6 +533,79 @@ def _now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def compute_delist(row):
+    """根据东方财富可转债行字典判定退市状态。
+
+    返回 (is_delisted:int, delist_date:str|None)。判定信号（任一满足即视为「已退市」）：
+      1) DELIST_DATE（摘牌日）存在；
+      2) 状态字段（BOND_STATUS / TRADE_STATUS / LISTING_STATUS 等）含「退市/摘牌/终止上市/停止上市/暂停上市」；
+      3) EXPIRE_DATE（到期日）早于今日（到期即停止交易，属于退市）。
+    第 3 条作为兜底，保证即使接口未返回退市专用字段，已到期债券也能被正确标记。
+    """
+    from datetime import date
+    today = date.today().strftime("%Y-%m-%d")
+    delist_date = (str(row.get("DELIST_DATE") or "") or "")[:10] or None
+    status_raw = " ".join(str(row.get(k) or "") for k in (
+        "BOND_STATUS", "TRADE_STATUS", "LISTING_STATUS", "BOND_STATE",
+        "TRADE_STATUS_NAME", "BOND_STATUS_NAME"))
+    is_delisted = 0
+    if delist_date:
+        is_delisted = 1
+    elif any(w in status_raw for w in ("退市", "摘牌", "终止上市", "停止上市", "暂停上市")):
+        is_delisted = 1
+        delist_date = delist_date or (str(row.get("EXPIRE_DATE") or "") or "")[:10] or None
+    if not is_delisted:
+        expire = (str(row.get("EXPIRE_DATE") or "") or "")[:10] or None
+        if expire and expire < today:
+            is_delisted = 1
+            delist_date = delist_date or expire
+    return is_delisted, delist_date
+
+
+def backfill_delist_status():
+    """按已存储的到期日/摘牌日，幂等回填 bonds 表的 is_delisted / delist_date。
+
+    规则：DELIST_DATE 已存在 → 已退市；EXPIRE_DATE < 今日 → 已到期退市。
+    仅对「未标记退市」的行做正向标记，不做反向清除（尊重手动/接口标记的已退市状态）。
+    返回本次新标记的行数。
+    """
+    from datetime import date
+    today = date.today().strftime("%Y-%m-%d")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT bond_code, expire_date, delist_date, is_delisted FROM bonds")
+    rows = cur.fetchall()
+    n = 0
+    for code, expire, ddate, is_del in rows:
+        if is_del:
+            continue
+        new_dd = None
+        delisted = 0
+        if ddate:
+            delisted = 1
+            new_dd = ddate
+        elif expire and expire < today:
+            delisted = 1
+            new_dd = expire
+        if delisted:
+            cur.execute("UPDATE bonds SET is_delisted=1, delist_date=? WHERE bond_code=?",
+                        (new_dd, code))
+            n += 1
+    conn.commit()
+    conn.close()
+    return n
+
+
+def set_delisted(code, delisted, delist_date=None):
+    """手动设置某转债的退市标记（管理后台切换用）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE bonds SET is_delisted=?, delist_date=? WHERE bond_code=?",
+                (1 if delisted else 0, delist_date, code))
+    conn.commit()
+    conn.close()
+
+
 def record_bond_view(bond_code, bond_name=None, stock_name=None):
     """记录一只转债被检索/浏览，供首页「最近检索」快捷入口。UPSERT 按 viewed_at 更新。"""
     conn = get_conn()
@@ -488,8 +626,9 @@ def get_recent_bonds(limit=12):
     """返回最近浏览的转债（按 viewed_at 倒序），用于首页快捷入口。"""
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT bond_code, bond_name, stock_name FROM recent_bonds "
-                "ORDER BY viewed_at DESC LIMIT ?", (limit,))
+    cur.execute("SELECT r.bond_code, r.bond_name, r.stock_name, b.is_delisted "
+                "FROM recent_bonds r LEFT JOIN bonds b ON r.bond_code=b.bond_code "
+                "ORDER BY r.viewed_at DESC LIMIT ?", (limit,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows

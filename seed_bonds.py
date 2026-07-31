@@ -14,7 +14,7 @@ import requests
 import time
 from datetime import datetime
 
-from db import upsert_bond
+from db import upsert_bond, compute_delist
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 BASE = ("https://datacenter-web.eastmoney.com/api/data/v1/get"
@@ -77,6 +77,9 @@ def main():
                 "created_at": now,
                 "updated_at": now,
             }
+            is_delisted, delist_date = compute_delist(d)
+            bond["is_delisted"] = is_delisted
+            bond["delist_date"] = delist_date
             upsert_bond(bond)
             total += 1
             if price is not None:
