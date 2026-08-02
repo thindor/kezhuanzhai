@@ -288,8 +288,13 @@ def _fetch_price(code):
     return None
 
 
-def crawl_bond(code):
-    """抓取并入库一只转债的十大持有人。返回结果摘要 dict。"""
+def crawl_bond(code, use_ths=True):
+    """抓取并入库一只转债的十大持有人。返回结果摘要 dict。
+
+    use_ths: 是否调用同花顺 F10 校正最新一期持有人性质（best-effort）。
+             单只手动抓取时保持 True；批量全量抓取时为避免对每只债都打同花顺
+             触发限流/封禁，传 False（性质改用名称规则 classify_nature 推断）。
+    """
     raw = (code or "").strip().upper()
     core = re.sub(r"\.(SZ|SH)$", "", raw)
     if not re.fullmatch(r"\d{6}", core):
@@ -312,8 +317,8 @@ def crawl_bond(code):
     for h in holders_raw:
         by_period[h["report_period"]].append(h)
 
-    # 同花顺性质校正（仅最新一期 best-effort）
-    nat_map = _ths_nature_map(core)
+    # 同花顺性质校正（仅最新一期 best-effort）；批量抓取时关闭以免触发限流/封禁
+    nat_map = _ths_nature_map(core) if use_ths else {}
 
     now = _now()
     holder_rows = []
