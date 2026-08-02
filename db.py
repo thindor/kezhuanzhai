@@ -407,7 +407,7 @@ def get_all_natural_persons(limit=2000, offset=0):
                ROUND(SUM(l.hold_amount * COALESCE(b.current_price, 100.0)), 2) AS mv_wan
         FROM latest l
         LEFT JOIN bonds b ON l.bond_code = b.bond_code
-        WHERE l.rn = 1
+        WHERE l.rn = 1 AND COALESCE(b.is_delisted, 0) = 0
         GROUP BY l.holder_name
         ORDER BY mv_wan DESC, bond_count DESC, l.holder_name
         LIMIT ? OFFSET ?
@@ -420,7 +420,21 @@ def get_all_natural_persons(limit=2000, offset=0):
 def count_natural_persons():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(DISTINCT holder_name) FROM holders WHERE is_natural = 1")
+    cur.execute("""
+        WITH latest AS (
+            SELECT h.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY h.holder_name, h.bond_code
+                       ORDER BY h.report_period DESC
+                   ) AS rn
+            FROM holders h
+            WHERE h.is_natural = 1
+        )
+        SELECT COUNT(DISTINCT l.holder_name)
+        FROM latest l
+        LEFT JOIN bonds b ON l.bond_code = b.bond_code
+        WHERE l.rn = 1 AND COALESCE(b.is_delisted, 0) = 0
+    """)
     n = cur.fetchone()[0]
     conn.close()
     return n
@@ -562,7 +576,7 @@ def get_natural_ranking(limit=50):
     cur = conn.cursor()
     cur.execute("""
         SELECT h.holder_name, h.bond_code, h.report_period, h.hold_amount,
-               b.bond_name, b.current_price
+               b.bond_name, b.current_price, b.is_delisted
         FROM holders h
         LEFT JOIN bonds b ON h.bond_code = b.bond_code
         WHERE h.is_natural = 1
@@ -580,6 +594,9 @@ def get_natural_ranking(limit=50):
     # 按自然人聚合
     agg = {}
     for (name, _code), v in best.items():
+        # 已退市可转债不计入自然人持仓市值（与牛散榜口径一致）
+        if v.get("is_delisted"):
+            continue
         price = v["current_price"] if v["current_price"] else 100.0
         mv = (v["hold_amount"] or 0) * price  # 万元
         a = agg.setdefault(name, {"holder_name": name, "mv_wan": 0.0,

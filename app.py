@@ -388,11 +388,10 @@ def holder_view(name):
     # 去重市值：每只转债仅取最新报告期持仓，避免跨期重复累加
     mv_wan, bond_count, record_count = get_person_market_value(name)
     latest = get_person_latest_holdings(name)
-    # 机构持仓：已退市可转债不计入持有市值与持有只数（与机构榜口径一致）；自然人保持原口径
-    if not is_natural:
-        _excl = [h for h in latest if not h.get("is_delisted")]
-        mv_wan = round(sum(h["mv_wan"] for h in _excl), 2)
-        bond_count = len(_excl)
+    # 已退市可转债不计入持有市值与持有只数（自然人与机构口径一致：均仅算未退市持仓）
+    _excl = [h for h in latest if not h.get("is_delisted")]
+    mv_wan = round(sum(h["mv_wan"] for h in _excl), 2)
+    bond_count = len(_excl)
     # 附加每只转债的历史下修次数（供持仓汇总表展示，未采集则 None）
     for h in latest:
         h["down_revise_count"] = get_down_revise_count(h["bond_code"])
