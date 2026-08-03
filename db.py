@@ -80,6 +80,20 @@ def init_db():
         stock_name  TEXT,
         viewed_at   TEXT
     )""")
+    # 可转债公告（强赎/不强赎/下修/提议下修/临近强赎/临近下修/即将发行等）
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS announcements (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        bond_code     TEXT NOT NULL,
+        bond_name     TEXT,
+        announce_type TEXT NOT NULL,
+        title         TEXT,
+        announce_date TEXT,
+        source        TEXT,
+        official_url  TEXT,
+        updated_at    TEXT,
+        UNIQUE(bond_code, announce_type)
+    )""")
     conn.commit()
     conn.close()
     # 启动即按到期日/摘牌日幂等回填退市标记（覆盖存量债券）
@@ -837,6 +851,96 @@ def get_recent_bonds(limit=12):
     cur.execute("SELECT r.bond_code, r.bond_name, r.stock_name, b.is_delisted "
                 "FROM recent_bonds r LEFT JOIN bonds b ON r.bond_code=b.bond_code "
                 "ORDER BY r.viewed_at DESC LIMIT ?", (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+# ---------------- 可转债公告 ----------------
+def upsert_announcement(a):
+    """写入/更新一条公告。按 (bond_code, announce_type) 去重（覆盖式），
+    保证「临近强赎/临近下修」等状态每天重算时只更新不堆积。"""
+    now = _now_str()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT INTO announcements (bond_code, bond_name, announce_type, title,
+                               announce_date, source, official_url, updated_at)
+    VALUES (:bond_code, :bond_name, :announce_type, :title,
+            :announce_date, :source, :official_url, :updated_at)
+    ON CONFLICT(bond_code, announce_type) DO UPDATE SET
+        bond_name=excluded.bond_name,
+        title=excluded.title,
+        announce_date=excluded.announce_date,
+        source=excluded.source,
+        official_url=excluded.official_url,
+        updated_at=excluded.updated_at
+    """, {
+        "bond_code": a.get("bond_code"),
+        "bond_name": a.get("bond_name"),
+        "announce_type": a.get("announce_type"),
+        "title": a.get("title"),
+        "announce_date": a.get("announce_date"),
+        "source": a.get("source", "东财"),
+        "official_url": a.get("official_url"),
+        "updated_at": now,
+    })
+    conn.commit()
+    conn.close()
+
+
+def get_announcements(atype=None, limit=2000):
+    """读取公告列表。可按 announce_type 筛选；默认按 announce_date 倒序。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    if atype:
+        cur.execute("SELECT * FROM announcements WHERE announce_type=? "
+                    "ORDER BY announce_date DESC LIMIT ?", (atype, limit))
+    else:
+        cur.execute("SELECT * FROM announcements ORDER BY announce_date DESC LIMIT ?",
+                    (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_announcement_type_counts():
+    """返回各公告类型的数量，供列表页 tabs 展示。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT announce_type, COUNT(*) n FROM announcements "
+                "GROUP BY announce_type")
+    rows = {r[0]: r[1] for r in cur.fetchall()}
+    conn.close()
+    return rows
+
+
+def clear_announcements():
+    """清空公告表（重新全量计算前调用）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM announcements")
+    conn.commit()
+    conn.close()
+
+
+def get_bonds_with_down_revise(limit=2000):
+    """返回有下修历史的转债（down_revise_count>0 且 down_revise_json 非空）。
+
+    供公告模块生成「下修（已下修）」类。返回 list[dict]，含
+    bond_code/bond_name/down_revise_json。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT bond_code, bond_name, down_revise_json
+        FROM bonds
+        WHERE down_revise_count > 0 AND down_revise_json IS NOT NULL
+          AND TRIM(down_revise_json) <> ''
+          AND COALESCE(is_delisted, 0) = 0
+        ORDER BY bond_code
+        LIMIT ?
+    """, (limit,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows

@@ -31,8 +31,10 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 get_person_market_value, get_person_latest_holdings,
                 get_natural_ranking, get_down_revise, save_down_revise,
                 get_down_revise_count, record_bond_view, get_recent_bonds,
-                set_delisted, search_bonds, get_all_institutions,
-                get_institution_ranking, count_institutions)
+                set_delisted, search_bonds,                 get_all_institutions,
+                get_institution_ranking, count_institutions,
+                upsert_announcement, get_announcements,
+                get_announcement_type_counts, clear_announcements)
 import crawler
 
 app = Flask(__name__)
@@ -449,6 +451,45 @@ def bonds_list():
                            total_pages=total_pages, code=code, delisted=delisted,
                            has_down=has_down, down_min=(down_min if down_min is not None else ""),
                            sort=sort, prev_url=prev_url, next_url=next_url)
+
+
+# 可转债公告类型展示顺序与配色
+ANN_TYPE_ORDER = ["即将发行", "强赎", "下修", "提议下修", "临近下修",
+                  "不下修", "临近强赎", "不强赎"]
+ANN_TYPE_COLOR = {
+    "即将发行": ("#2f6fed", "#eaf1ff"),
+    "强赎": ("#d4263a", "#ffeaea"),
+    "下修": ("#1aa35a", "#e7f8ef"),
+    "提议下修": ("#d46b08", "#fff3e6"),
+    "临近下修": ("#d4a106", "#fff8e1"),
+    "不下修": ("#8c4bd4", "#f3eaff"),
+    "临近强赎": ("#d4380d", "#fff1e6"),
+    "不强赎": ("#0a7d3e", "#e7f6ee"),
+}
+
+
+@app.route("/announcements")
+def announcements():
+    """可转债公告列表（东财全量驱动，7+ 类）。支持按类型筛选。"""
+    atype = request.args.get("type", "").strip()
+    if atype and atype not in ANN_TYPE_ORDER:
+        atype = ""
+    rows = get_announcements(atype=atype or None, limit=2000)
+    counts = get_announcement_type_counts()
+    total = sum(counts.values())
+    # tabs：全部 + 各类型（按固定顺序，仅显示有数据的类型或当前选中类型）
+    tabs = [{"key": "", "label": "全部", "n": total}]
+    for t in ANN_TYPE_ORDER:
+        n = counts.get(t, 0)
+        if n or (atype == t):
+            tabs.append({"key": t, "label": t, "n": n})
+    # 给每行补上配色标签
+    for r in rows:
+        fg, bg = ANN_TYPE_COLOR.get(r.get("announce_type"), ("#555", "#f0f0f0"))
+        r["_fg"] = fg
+        r["_bg"] = bg
+    return render_template("announcements.html", rows=rows, tabs=tabs,
+                           active_type=atype, total=total)
 
 
 @app.route("/institutions")

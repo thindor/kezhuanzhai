@@ -13,12 +13,14 @@
   - is_natural（自然人标记）：当 holder_nature == "个人" 时置 1，供后续筛选/统计使用。
 """
 import re
+import time
 import requests
 from collections import defaultdict
 from datetime import datetime
 
 from config import EM_BASE, EM_HEADERS, THS_BASE
-from db import upsert_bond, delete_holders, insert_holders, compute_delist
+from db import upsert_bond, delete_holders, insert_holders, compute_delist, \
+    get_bonds_with_down_revise
 
 
 def _now():
@@ -423,3 +425,259 @@ def fetch_down_revise(code):
         except (ValueError, IndexError):
             continue
     return len(records), records
+
+
+# ---------------- 可转债公告（东财全量驱动，覆盖 7 类事件/状态） ----------------
+def _to_float(v):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_date(s):
+    if not s:
+        return None
+    s = str(s).strip()
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _fmt(d):
+    if d is None:
+        return None
+    if isinstance(d, datetime):
+        return d.strftime("%Y-%m-%d")
+    return str(d)[:10]
+
+
+def _market_of(code):
+    code = str(code or "")
+    if code.startswith("11"):
+        return "SH"
+    return "SZ"
+
+
+def _exchange_announce_url(code):
+    """跳转到对应交易所的可转债公告披露板块（官方地址）。"""
+    if _market_of(code) == "SH":
+        return "https://www.sse.com.cn/disclosure/bond/convertible/"
+    return "http://www.szse.cn/disclosure/bond/convertible/index.html"
+
+
+def _is_delisted(d):
+    dd = _parse_date(d.get("DELIST_DATE"))
+    if dd and dd < datetime.now().date():
+        return True
+    return False
+
+
+def _classify_quote(q, today):
+    """根据行情板数据（现价 f2 + 转股溢价率 f24）推算公告类型。
+
+    ratio = 正股 / 转股价 = 转股价值 / 100 = f2 / (100 + f24)。
+    行情板不返回正股价 / 赎回公告细分，故「强赎」表示已满足强赎条件
+    （无法区分公司后续是否公告不强赎）；「下修」由本地 bonds 表历史补充。
+    返回 [dict, ...]。
+    """
+    code = q.get("code")
+    name = q.get("name") or code
+    price = _to_float(q.get("price"))
+    premium = _to_float(q.get("premium"))  # 转股溢价率（%）
+    url = _exchange_announce_url(code)
+    if price is None or premium is None:
+        return []
+    denom = 100.0 + premium
+    if denom <= 0:
+        return []
+    ratio = price / denom          # = 转股价值/100 = 正股/转股价
+    cv = ratio * 100.0             # 转股价值
+    ds = today.strftime("%Y-%m-%d")
+    res = []
+
+    def mk(atype, title):
+        return {"bond_code": code, "bond_name": name, "announce_type": atype,
+                "title": title, "announce_date": ds,
+                "source": "东财行情", "official_url": url}
+
+    if ratio >= 1.30:
+        res.append(mk("强赎",
+                      "%s 已满足强赎条件（转股价值约 %.0f，正股/转股价=%.2f），关注公司强赎/不强赎公告"
+                      % (name, cv, ratio)))
+    elif ratio >= 1.20:
+        res.append(mk("临近强赎",
+                      "%s 临近强赎（转股价值约 %.0f，正股/转股价=%.2f）"
+                      % (name, cv, ratio)))
+    elif ratio <= 0.82:
+        res.append(mk("不下修",
+                      "%s 已触发下修条件（正股/转股价=%.2f），关注公司是否下修"
+                      % (name, ratio)))
+    elif ratio <= 0.92:
+        res.append(mk("提议下修",
+                      "%s 价格已触发下修条件（正股/转股价=%.2f），关注董事会下修提议"
+                      % (name, ratio)))
+    elif ratio <= 0.98:
+        res.append(mk("临近下修",
+                      "%s 临近下修（正股/转股价=%.2f）" % (name, ratio)))
+    return res
+
+
+def _fmt2(v):
+    try:
+        return "%.2f" % float(v)
+    except Exception:
+        return str(v)
+
+
+def fetch_cb_quotes():
+    """分页拉取东财可转债板块（b:MK0354）全量行情：代码/名称/现价/转股溢价率。
+
+    该行情接口分页（pn/pz）正常可用，覆盖全部活跃可转债，用作公告推算主数据。
+    东财常对高频访问限速/封 IP，故单页失败重试 3 次（间隔 2s）以提升稳定性。
+    """
+    out = []
+    pn = 1
+    while pn <= 10:
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
+        params = {"pn": pn, "pz": 100, "po": "1", "np": "1", "fltt": "2",
+                  "invt": "2", "fid": "f3", "fs": "b:MK0354",
+                  "fields": "f12,f14,f2,f24", "_": int(time.time() * 1000)}
+        j = None
+        for _ in range(4):
+            try:
+                r = requests.get(url, params=params, headers=EM_HEADERS, timeout=15)
+                j = r.json()
+                break
+            except Exception:
+                time.sleep(5)
+        if j is None:
+            break
+        data = (j.get("data") or {}).get("diff") or []
+        if not data:
+            break
+        for d in data:
+            code = d.get("f12")
+            if not code:
+                continue
+            out.append({"code": str(code), "name": d.get("f14"),
+                        "price": d.get("f2"), "premium": d.get("f24")})
+        # 东财该接口单次最多返回 100 条：满 100 说明可能还有下一页
+        if len(data) < 100:
+            break
+        pn += 1
+        time.sleep(1.5)  # 页间延迟，降低连续请求被限流概率
+    return out
+
+
+def fetch_upcoming_bonds():
+    """采集「即将发行」可转债：东财 RPT_BOND_CB_LIST 按申购日倒序取最新一批，
+    筛选尚未上市（LISTING_DATE 为空）的债。单次调用，失败不影响其它类别。
+    返回 [dict, ...]（announce_type=即将发行）。
+    """
+    out = []
+    params = {
+        "reportName": "RPT_BOND_CB_LIST",
+        "columns": "ALL",
+        "pageSize": 100,
+        "sortColumns": "PUBLIC_START_DATE",
+        "sortTypes": "-1",
+        "source": "WEB", "client": "WEB", "p": 1,
+    }
+    for _ in range(3):
+        try:
+            r = requests.get(EM_BASE, params=params, headers=EM_HEADERS, timeout=15)
+            j = r.json()
+            batch = (j.get("result") or {}).get("data") or []
+            break
+        except Exception:
+            batch = []
+            time.sleep(2)
+    for d in batch:
+        code = d.get("SECURITY_CODE")
+        if not code:
+            continue
+        name = d.get("SECURITY_NAME_ABBR") or code
+        # 仅纳入尚未上市（LISTING_DATE 为空）的债
+        listing = _parse_date(d.get("LISTING_DATE"))
+        if listing is not None:
+            continue
+        pub = _parse_date(d.get("PUBLIC_START_DATE"))
+        url = _exchange_announce_url(code)
+        title = "%s 即将发行（申购日 %s，尚未上市）" % (name, _fmt(pub) or "—")
+        out.append({"bond_code": code, "bond_name": name, "announce_type": "即将发行",
+                    "title": title,
+                    "announce_date": _fmt(pub) or datetime.now().strftime("%Y-%m-%d"),
+                    "source": "东财", "official_url": url})
+    print("[ann] 即将发行可转债数量：%d" % len(out))
+    return out
+
+
+def fetch_announcements():
+    """采集全市场可转债公告。
+
+    数据源：
+      - 东财行情板 b:MK0354（分页可用）：现价 + 转股溢价率 -> ratio，推算
+        强赎 / 临近强赎 / 提议下修 / 临近下修 / 不下修。
+      - 本地 bonds 表 down_revise_json（集思录历史）：已下修。
+    按 (bond_code, announce_type) 维度产出（调用方 upsert 去重）。
+    返回 (count, rows)。
+    """
+    import json as _json
+    out = []
+    seen = set()
+    today = datetime.now().date()
+
+    # 0) 即将发行（东财申购日历，单独调用，失败不影响其它类别）
+    try:
+        for a in fetch_upcoming_bonds():
+            key = (a["bond_code"], a["announce_type"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(a)
+    except Exception as e:
+        print("[ann] 即将发行采集失败：%s" % e)
+
+    # 1) 行情板：强赎 / 临近强赎 / 提议下修 / 临近下修 / 不下修
+    quotes = fetch_cb_quotes()
+    print("[ann] 行情板可转债数量：%d" % len(quotes))
+    for q in quotes:
+        for a in _classify_quote(q, today):
+            key = (a["bond_code"], a["announce_type"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(a)
+
+    # 2) 本地 bonds 表：已下修（集思录历史）
+    try:
+        rows = get_bonds_with_down_revise()
+    except Exception as e:
+        print("[ann] 读取本地下修历史失败：%s" % e)
+        rows = []
+    for b in rows:
+        code = b["bond_code"]
+        name = b["bond_name"] or code
+        url = _exchange_announce_url(code)
+        dj = b.get("down_revise_json")
+        try:
+            hist = _json.loads(dj) if dj else []
+        except Exception:
+            hist = []
+        last = hist[-1] if hist else None
+        if last:
+            md = last.get("meeting_date") or last.get("effective_date") or "—"
+            title = "%s 已下修（最近一次：%s 转股价 %s → %s）" % (
+                name, md, last.get("price_before"), last.get("price_after"))
+        else:
+            title = "%s 有下修历史" % name
+        key = (code, "下修")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"bond_code": code, "bond_name": name, "announce_type": "下修",
+                    "title": title, "announce_date": today.strftime("%Y-%m-%d"),
+                    "source": "集思录", "official_url": url})
+    return len(out), out
