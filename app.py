@@ -782,10 +782,11 @@ def admin_delisted(code):
 if __name__ == "__main__":
     # 仅供本地使用；如需外网部署请改由 gunicorn/waitress 托管并关闭 debug
     # 默认仅监听本机 127.0.0.1；如需局域网访问可改为 "0.0.0.0"
-    # debug 模式开启「自动重载」：修改 py / 模板后 Flask 自动重启，无需手动重启进程
-    #   —— 本地开发默认开（FLASK_DEBUG 缺省=1）；部署到 kzz.bukui.fun 时请 set FLASK_DEBUG=0 或用生产服务器托管
+    # debug 模式开启「自动重载」：修改 py / 模板后 Flask 自动重启，无需手动重启进程。
+    #   但 WorkBuddy 安全组件(tsbx)会把 reloader 子进程限制为只读，导致 SQLite 写入失败，
+    #   因此本地默认关闭 debug（FLASK_DEBUG 缺省=0）。如确需热重载，可 set FLASK_DEBUG=1，但会触发只读问题。
     # 后台预热搜索索引（全市场列表），首个用户请求不会被抓取阻塞
     threading.Thread(target=_warmup_index, daemon=True).start()
     import os
-    debug_mode = os.environ.get("FLASK_DEBUG", "1") == "1"
+    debug_mode = os.environ.get("FLASK_DEBUG", "0") == "1"
     app.run(host="127.0.0.1", port=5000, debug=debug_mode, threaded=True)
