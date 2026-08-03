@@ -22,6 +22,15 @@ from config import EM_BASE, EM_HEADERS, THS_BASE
 from db import get_conn, upsert_bond, delete_holders, insert_holders, compute_delist, \
     get_bonds_with_down_revise
 
+# akshare 作为可转债事件（强赎/不强赎/下修）的兜底信息源（集思录接口在本机可用）。
+# 导入失败时降级为空实现，不影响其它爬虫。
+try:
+    import akshare as ak
+    _HAS_AKSHARE = True
+except Exception:
+    ak = None
+    _HAS_AKSHARE = False
+
 
 def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -376,18 +385,25 @@ def crawl_bond(code, use_ths=True):
 
 # ---------------- 历史下修记录（集思录 adj_logs，免费匿名） ----------------
 def fetch_down_revise(code):
-    """采集某转债的历史下修记录（转股价格调整记录中的「下修」部分）。
+    """采集某转债的历史下修记录。
 
-    数据源：集思录单只转债接口 https://www.jisilu.cn/data/cbnew/adj_logs/?bond_id=CODE
+    主源：集思录单只转债 HTML（adj_logs）；兜底：akshare 集思录接口
+    （bond_cb_adj_logs_jsl）。主源为空/失败时自动回退兜底源。
+    返回 (count, records)，records 字段：bond_name, meeting_date,
+    price_before, price_after, effective_date, floor_price。
+    """
+    count, records = _fetch_down_revise_jsl_html(code)
+    if count == 0:
+        c2, recs2 = _fetch_down_revise_akshare(code)
+        if c2:
+            return c2, recs2
+    return count, records
+
+
+def _fetch_down_revise_jsl_html(code):
+    """主源：集思录单只转债接口 https://www.jisilu.cn/data/cbnew/adj_logs/?bond_id=CODE
     该表列名即「下修前/后转股价、下修底价」，天然是下修语义（不含分红类调整）。
-
-    返回 (count, records)：
-      count   : 下修次数（表格行数）
-      records : list[dict]，每条含
-                bond_name, meeting_date(股东大会日/下修提议审议日),
-                price_before, price_after, effective_date(新转股价生效日期),
-                floor_price(下修底价)
-    无记录或无效代码返回 (0, [])。
+    返回 (count, records)；无记录或无效代码返回 (0, [])。
     """
     import html as _html
     import re as _re
@@ -423,6 +439,33 @@ def fetch_down_revise(code):
                 "floor_price": float(cells[5]) if cells[5] else None,
             })
         except (ValueError, IndexError):
+            continue
+    return len(records), records
+
+
+def _fetch_down_revise_akshare(code):
+    """兜底：akshare 集思录单债转股价调整记录（bond_cb_adj_logs_jsl）。
+    返回 (count, records)；字段与 _fetch_down_revise_jsl_html 对齐。
+    """
+    if not _HAS_AKSHARE:
+        return 0, []
+    try:
+        df = ak.bond_cb_adj_logs_jsl(symbol=str(code))
+    except Exception as e:
+        print("[dr] akshare 下修兜底失败 %s: %s" % (code, e))
+        return 0, []
+    records = []
+    for _, row in df.iterrows():
+        try:
+            records.append({
+                "bond_name": str(row.get("转债名称") or ""),
+                "meeting_date": str(row.get("股东大会日") or ""),
+                "price_before": _to_float(row.get("下修前转股价")),
+                "price_after": _to_float(row.get("下修后转股价")),
+                "effective_date": str(row.get("新转股价生效日期") or ""),
+                "floor_price": _to_float(row.get("下修底价")),
+            })
+        except Exception:
             continue
     return len(records), records
 
@@ -486,48 +529,6 @@ def _is_delisted(d):
     return False
 
 
-def _classify_by_ratio(code, name, ratio, stock_code, today):
-    """根据 ratio = 正股 / 转股价 推算公告类型。
-
-    ratio 即「转股价值 / 100」：>=1.30 满足强赎条件；1.20~1.30 临近强赎；
-    <=0.82 已触发下修条件（不下修）；<=0.92 提议下修；<=0.98 临近下修。
-    行情源只给价格，不返回公司是否公告强赎/不下修，故「强赎」指满足条件、关注后续公告。
-    返回 [dict, ...]。official_url 优先链到东方财富个股公告中心（看正文）。
-    """
-    if ratio is None:
-        return []
-    url = _official_url_for(code, stock_code)
-    ds = today.strftime("%Y-%m-%d")
-    cv = ratio * 100.0
-    res = []
-
-    def mk(atype, title):
-        return {"bond_code": code, "bond_name": name, "announce_type": atype,
-                "title": title, "announce_date": ds,
-                "source": "腾讯行情", "official_url": url}
-
-    if ratio >= 1.30:
-        res.append(mk("强赎",
-                      "%s 已满足强赎条件（转股价值约 %.0f，正股/转股价=%.2f），关注公司强赎/不强赎公告"
-                      % (name, cv, ratio)))
-    elif ratio >= 1.20:
-        res.append(mk("临近强赎",
-                      "%s 临近强赎（转股价值约 %.0f，正股/转股价=%.2f）"
-                      % (name, cv, ratio)))
-    elif ratio <= 0.82:
-        res.append(mk("不下修",
-                      "%s 已触发下修条件（正股/转股价=%.2f），关注公司是否下修"
-                      % (name, ratio)))
-    elif ratio <= 0.92:
-        res.append(mk("提议下修",
-                      "%s 价格已触发下修条件（正股/转股价=%.2f），关注董事会下修提议"
-                      % (name, ratio)))
-    elif ratio <= 0.98:
-        res.append(mk("临近下修",
-                      "%s 临近下修（正股/转股价=%.2f）" % (name, ratio)))
-    return res
-
-
 def _fmt2(v):
     try:
         return "%.2f" % float(v)
@@ -535,93 +536,63 @@ def _fmt2(v):
         return str(v)
 
 
-def _load_active_bonds_for_ratio():
-    """返回 [(bond_code, bond_name, stock_code, current_transfer_price), ...]，
-    仅取未退市且正股代码/转股价齐全的债，用于腾讯行情算 ratio。
-    """
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT bond_code, bond_name, stock_code, current_transfer_price "
-        "FROM bonds WHERE stock_code IS NOT NULL AND TRIM(stock_code) <> '' "
-        "AND current_transfer_price IS NOT NULL AND COALESCE(is_delisted, 0) = 0")
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+def _safe_float_str(v):
+    """把可能是 NaN 的数值安全格式化为字符串；NaN/空返回 None。"""
+    try:
+        f = float(v)
+    except (ValueError, TypeError):
+        return None
+    if f != f:  # NaN
+        return None
+    return "%.2f" % f
 
 
-def fetch_cb_ratios():
-    """用腾讯行情（qt.gtimg.cn，直连稳定）取正股现价，结合本地 bonds 表转股价
-    算 ratio（= 正股 / 转股价 = 转股价值 / 100）。
+def fetch_cb_redeem_akshare():
+    """用 akshare 集思录强赎表取真实强赎事件（非价格推算）。
 
-    东财行情板（push2）本机频繁被封/直连被断，故改用腾讯行情作主源；
-    腾讯接口直连可用、不限流，按正股代码批量查询即可覆盖全市场。
-    返回 [dict{code, name, ratio, stock_code}]，ratio=None 的债已剔除。
+    集思录「强赎状态」字段给出权威事件状态：
+      - 已公告强赎 -> 强赎
+      - 公告不强赎 -> 不强赎
+    其余（空 / 计数中）非事件，跳过。
+    返回 [dict(announce_type in {'强赎','不强赎'}, ...)]。
     """
     out = []
+    if not _HAS_AKSHARE:
+        return out
     try:
-        rows = _load_active_bonds_for_ratio()
+        df = ak.bond_cb_redeem_jsl()
     except Exception as e:
-        print("[ann] 读取转债-正股-转股价失败：%s" % e)
-        return out
-    if not rows:
+        print("[ann] akshare 强赎采集失败：%s" % e)
         return out
 
-    def pref(code):
-        code = str(code)
-        return ("sh" + code) if code.startswith("6") else ("sz" + code)
+    def mk(code, name, atype, row):
+        sc = str(row.get("正股代码") or "")
+        url = _official_url_for(code, sc)
+        price_s = _safe_float_str(row.get("强赎价"))
+        cnt = re.sub(r"<[^>]+>", "", str(row.get("强赎天计数") or "")).strip()
+        if atype == "强赎":
+            title = "%s 已公告强赎（强赎价 %s，强赎计数 %s）" % (
+                name, price_s or "", cnt or "")
+        else:
+            title = "%s 公告不强赎（强赎计数 %s）" % (name, cnt or "")
+        return {"bond_code": code, "bond_name": name, "announce_type": atype,
+                "title": title,
+                "announce_date": datetime.now().strftime("%Y-%m-%d"),
+                "source": "集思录", "official_url": url}
 
-    # 按正股聚合（多只转债可能对应同一正股），减少请求
-    stock_map = {}
-    for bc, bn, sc, tp in rows:
-        if not sc:
+    for _, row in df.iterrows():
+        status = str(row.get("强赎状态") or "").strip()
+        code = str(row.get("代码") or "").strip()
+        name = str(row.get("名称") or "").strip()
+        if not code or not name:
             continue
-        key = pref(sc)
-        stock_map.setdefault(key, []).append((str(bc), bn, tp))
-
-    sc_prices = {}
-    items = list(stock_map.keys())
-    batch = 50
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    for i in range(0, len(items), batch):
-        chunk = items[i:i + batch]
-        try:
-            r = requests.get("https://qt.gtimg.cn/q", params={"q": ",".join(chunk)},
-                              timeout=20, proxies={"http": None, "https": None},
-                              headers=headers)
-            text = r.text
-        except Exception:
-            time.sleep(2)
-            continue
-        for line in text.strip().split("\n"):
-            if not line.strip():
-                continue
-            c = line.split("=")[0].replace("v_", "")
-            try:
-                val = line.split('"')[1]
-            except Exception:
-                continue
-            parts = val.split("~")
-            if len(parts) > 3 and parts[3]:
-                try:
-                    sc_prices[c] = float(parts[3])
-                except Exception:
-                    pass
-        time.sleep(0.3)
-
-    for key, lst in stock_map.items():
-        sp = sc_prices.get(key)
-        if sp is None:
-            continue
-        for bc, bn, tp in lst:
-            try:
-                tpf = float(tp)
-            except Exception:
-                continue
-            if tpf <= 0:
-                continue
-            ratio = sp / tpf
-            out.append({"code": bc, "name": bn, "ratio": ratio, "stock_code": key[2:]})
+        if status == "已公告强赎":
+            out.append(mk(code, name, "强赎", row))
+        elif status == "公告不强赎":
+            out.append(mk(code, name, "不强赎", row))
+    print("[ann] akshare 强赎/不强赎：强赎 %d / 不强赎 %d" % (
+        sum(1 for a in out if a["announce_type"] == "强赎"),
+        sum(1 for a in out if a["announce_type"] == "不强赎")))
     return out
 
 
@@ -670,12 +641,12 @@ def fetch_upcoming_bonds(code2stock=None):
 
 
 def fetch_announcements():
-    """采集全市场可转债公告。
+    """采集全市场可转债公告（真实事件，非价格推算）。
 
     数据源：
-      - 腾讯行情 qt.gtimg.cn（直连稳定）：取正股现价 + 本地 bonds 表转股价 -> ratio，
-        推算 强赎 / 临近强赎 / 提议下修 / 临近下修 / 不下修。
-      - 本地 bonds 表 down_revise_json（集思录历史）：已下修。
+      - 即将发行：东方财富 RPT_BOND_CB_LIST 申购日历（未上市债）。
+      - 强赎 / 不强赎：akshare 集思录强赎表（强赎状态=已公告强赎 / 公告不强赎），真实事件。
+      - 下修：本地 bonds 表 down_revise_json（集思录历史，采集时主源+akshare 兜底）。
     按 (bond_code, announce_type) 维度产出（调用方 upsert 去重）。
     返回 (count, rows)。
     """
@@ -703,17 +674,16 @@ def fetch_announcements():
     except Exception as e:
         print("[ann] 即将发行采集失败：%s" % e)
 
-    # 1) 腾讯行情：强赎 / 临近强赎 / 提议下修 / 临近下修 / 不下修
-    quotes = fetch_cb_ratios()
-    print("[ann] 行情类可转债数量：%d" % len(quotes))
-    for q in quotes:
-        for a in _classify_by_ratio(q["code"], q["name"], q.get("ratio"),
-                                    q.get("stock_code"), today):
+    # 1) akshare 集思录强赎表：强赎（已公告强赎）/ 不强赎（公告不强赎），真实事件状态
+    try:
+        for a in fetch_cb_redeem_akshare():
             key = (a["bond_code"], a["announce_type"])
             if key in seen:
                 continue
             seen.add(key)
             out.append(a)
+    except Exception as e:
+        print("[ann] 强赎/不强赎采集失败：%s" % e)
 
     # 2) 本地 bonds 表：已下修（集思录历史），best-effort 精确定位下修公告正文
     try:

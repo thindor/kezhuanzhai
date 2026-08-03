@@ -454,23 +454,18 @@ def bonds_list():
 
 
 # 可转债公告类型展示顺序与配色
-ANN_TYPE_ORDER = ["即将发行", "强赎", "下修", "提议下修", "临近下修",
-                  "不下修", "临近强赎", "不强赎"]
+ANN_TYPE_ORDER = ["即将发行", "强赎", "不强赎", "下修"]
 ANN_TYPE_COLOR = {
     "即将发行": ("#2f6fed", "#eaf1ff"),
     "强赎": ("#d4263a", "#ffeaea"),
-    "下修": ("#1aa35a", "#e7f8ef"),
-    "提议下修": ("#d46b08", "#fff3e6"),
-    "临近下修": ("#d4a106", "#fff8e1"),
-    "不下修": ("#8c4bd4", "#f3eaff"),
-    "临近强赎": ("#d4380d", "#fff1e6"),
     "不强赎": ("#0a7d3e", "#e7f6ee"),
+    "下修": ("#1aa35a", "#e7f8ef"),
 }
 
 
 @app.route("/announcements")
 def announcements():
-    """可转债公告列表（东财全量驱动，7+ 类）。支持按类型筛选。"""
+    """可转债公告列表（真实事件：即将发行/强赎/不强赎/下修）。支持按类型筛选。"""
     atype = request.args.get("type", "").strip()
     if atype and atype not in ANN_TYPE_ORDER:
         atype = ""

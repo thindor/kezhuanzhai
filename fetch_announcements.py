@@ -1,11 +1,14 @@
-"""定时采集可转债公告（东财全量驱动）。
+"""定时采集可转债公告（真实事件：即将发行/强赎/不强赎/下修）。
 
 用法：
   python fetch_announcements.py          # 增量更新（按 (code,type) 覆盖式去重）
   python fetch_announcements.py --clear  # 清空公告表后全量重算
 
-建议通过 Windows 任务计划程序每日定时执行一次（东财/集思录常封 IP，
-脚本内置跳过异常分页，单页失败不会中断整体采集）。
+数据源：
+  - 即将发行：东方财富 RPT_BOND_CB_LIST 申购日历
+  - 强赎/不强赎：akshare 集思录强赎表（兜底信息源）
+  - 下修：本地 bonds 表 down_revise_json（集思录采集，主源+akshare 兜底）
+建议通过 Windows 任务计划程序每日定时执行一次。
 """
 import sys
 import time
