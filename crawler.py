@@ -19,7 +19,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from config import EM_BASE, EM_HEADERS, THS_BASE
-from db import upsert_bond, delete_holders, insert_holders, compute_delist, \
+from db import get_conn, upsert_bond, delete_holders, insert_holders, compute_delist, \
     get_bonds_with_down_revise
 
 
@@ -467,6 +467,18 @@ def _exchange_announce_url(code):
     return "http://www.szse.cn/disclosure/bond/convertible/index.html"
 
 
+def _em_notice_center(stock_code):
+    """东方财富个股公告中心：列出该正股全部公告，点进去即正文。"""
+    return "https://data.eastmoney.com/notices/stock/%s.html" % str(stock_code)
+
+
+def _official_url_for(bond_code, stock_code):
+    """优先链到东方财富个股公告中心（能直接看正文）；无正股代码时退回交易所板块。"""
+    if stock_code:
+        return _em_notice_center(stock_code)
+    return _exchange_announce_url(bond_code)
+
+
 def _is_delisted(d):
     dd = _parse_date(d.get("DELIST_DATE"))
     if dd and dd < datetime.now().date():
@@ -474,33 +486,25 @@ def _is_delisted(d):
     return False
 
 
-def _classify_quote(q, today):
-    """根据行情板数据（现价 f2 + 转股溢价率 f24）推算公告类型。
+def _classify_by_ratio(code, name, ratio, stock_code, today):
+    """根据 ratio = 正股 / 转股价 推算公告类型。
 
-    ratio = 正股 / 转股价 = 转股价值 / 100 = f2 / (100 + f24)。
-    行情板不返回正股价 / 赎回公告细分，故「强赎」表示已满足强赎条件
-    （无法区分公司后续是否公告不强赎）；「下修」由本地 bonds 表历史补充。
-    返回 [dict, ...]。
+    ratio 即「转股价值 / 100」：>=1.30 满足强赎条件；1.20~1.30 临近强赎；
+    <=0.82 已触发下修条件（不下修）；<=0.92 提议下修；<=0.98 临近下修。
+    行情源只给价格，不返回公司是否公告强赎/不下修，故「强赎」指满足条件、关注后续公告。
+    返回 [dict, ...]。official_url 优先链到东方财富个股公告中心（看正文）。
     """
-    code = q.get("code")
-    name = q.get("name") or code
-    price = _to_float(q.get("price"))
-    premium = _to_float(q.get("premium"))  # 转股溢价率（%）
-    url = _exchange_announce_url(code)
-    if price is None or premium is None:
+    if ratio is None:
         return []
-    denom = 100.0 + premium
-    if denom <= 0:
-        return []
-    ratio = price / denom          # = 转股价值/100 = 正股/转股价
-    cv = ratio * 100.0             # 转股价值
+    url = _official_url_for(code, stock_code)
     ds = today.strftime("%Y-%m-%d")
+    cv = ratio * 100.0
     res = []
 
     def mk(atype, title):
         return {"bond_code": code, "bond_name": name, "announce_type": atype,
                 "title": title, "announce_date": ds,
-                "source": "东财行情", "official_url": url}
+                "source": "腾讯行情", "official_url": url}
 
     if ratio >= 1.30:
         res.append(mk("强赎",
@@ -531,51 +535,102 @@ def _fmt2(v):
         return str(v)
 
 
-def fetch_cb_quotes():
-    """分页拉取东财可转债板块（b:MK0354）全量行情：代码/名称/现价/转股溢价率。
+def _load_active_bonds_for_ratio():
+    """返回 [(bond_code, bond_name, stock_code, current_transfer_price), ...]，
+    仅取未退市且正股代码/转股价齐全的债，用于腾讯行情算 ratio。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT bond_code, bond_name, stock_code, current_transfer_price "
+        "FROM bonds WHERE stock_code IS NOT NULL AND TRIM(stock_code) <> '' "
+        "AND current_transfer_price IS NOT NULL AND COALESCE(is_delisted, 0) = 0")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
-    该行情接口分页（pn/pz）正常可用，覆盖全部活跃可转债，用作公告推算主数据。
-    东财常对高频访问限速/封 IP，故单页失败重试 3 次（间隔 2s）以提升稳定性。
+
+def fetch_cb_ratios():
+    """用腾讯行情（qt.gtimg.cn，直连稳定）取正股现价，结合本地 bonds 表转股价
+    算 ratio（= 正股 / 转股价 = 转股价值 / 100）。
+
+    东财行情板（push2）本机频繁被封/直连被断，故改用腾讯行情作主源；
+    腾讯接口直连可用、不限流，按正股代码批量查询即可覆盖全市场。
+    返回 [dict{code, name, ratio, stock_code}]，ratio=None 的债已剔除。
     """
     out = []
-    pn = 1
-    while pn <= 10:
-        url = "https://push2.eastmoney.com/api/qt/clist/get"
-        params = {"pn": pn, "pz": 100, "po": "1", "np": "1", "fltt": "2",
-                  "invt": "2", "fid": "f3", "fs": "b:MK0354",
-                  "fields": "f12,f14,f2,f24", "_": int(time.time() * 1000)}
-        j = None
-        for _ in range(4):
-            try:
-                r = requests.get(url, params=params, headers=EM_HEADERS, timeout=15)
-                j = r.json()
-                break
-            except Exception:
-                time.sleep(5)
-        if j is None:
-            break
-        data = (j.get("data") or {}).get("diff") or []
-        if not data:
-            break
-        for d in data:
-            code = d.get("f12")
-            if not code:
+    try:
+        rows = _load_active_bonds_for_ratio()
+    except Exception as e:
+        print("[ann] 读取转债-正股-转股价失败：%s" % e)
+        return out
+    if not rows:
+        return out
+
+    def pref(code):
+        code = str(code)
+        return ("sh" + code) if code.startswith("6") else ("sz" + code)
+
+    # 按正股聚合（多只转债可能对应同一正股），减少请求
+    stock_map = {}
+    for bc, bn, sc, tp in rows:
+        if not sc:
+            continue
+        key = pref(sc)
+        stock_map.setdefault(key, []).append((str(bc), bn, tp))
+
+    sc_prices = {}
+    items = list(stock_map.keys())
+    batch = 50
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    for i in range(0, len(items), batch):
+        chunk = items[i:i + batch]
+        try:
+            r = requests.get("https://qt.gtimg.cn/q", params={"q": ",".join(chunk)},
+                              timeout=20, proxies={"http": None, "https": None},
+                              headers=headers)
+            text = r.text
+        except Exception:
+            time.sleep(2)
+            continue
+        for line in text.strip().split("\n"):
+            if not line.strip():
                 continue
-            out.append({"code": str(code), "name": d.get("f14"),
-                        "price": d.get("f2"), "premium": d.get("f24")})
-        # 东财该接口单次最多返回 100 条：满 100 说明可能还有下一页
-        if len(data) < 100:
-            break
-        pn += 1
-        time.sleep(1.5)  # 页间延迟，降低连续请求被限流概率
+            c = line.split("=")[0].replace("v_", "")
+            try:
+                val = line.split('"')[1]
+            except Exception:
+                continue
+            parts = val.split("~")
+            if len(parts) > 3 and parts[3]:
+                try:
+                    sc_prices[c] = float(parts[3])
+                except Exception:
+                    pass
+        time.sleep(0.3)
+
+    for key, lst in stock_map.items():
+        sp = sc_prices.get(key)
+        if sp is None:
+            continue
+        for bc, bn, tp in lst:
+            try:
+                tpf = float(tp)
+            except Exception:
+                continue
+            if tpf <= 0:
+                continue
+            ratio = sp / tpf
+            out.append({"code": bc, "name": bn, "ratio": ratio, "stock_code": key[2:]})
     return out
 
 
-def fetch_upcoming_bonds():
+def fetch_upcoming_bonds(code2stock=None):
     """采集「即将发行」可转债：东财 RPT_BOND_CB_LIST 按申购日倒序取最新一批，
     筛选尚未上市（LISTING_DATE 为空）的债。单次调用，失败不影响其它类别。
-    返回 [dict, ...]（announce_type=即将发行）。
+    返回 [dict, ...]（announce_type=即将发行）。official_url 优先个股公告中心。
     """
+    code2stock = code2stock or {}
     out = []
     params = {
         "reportName": "RPT_BOND_CB_LIST",
@@ -604,7 +659,7 @@ def fetch_upcoming_bonds():
         if listing is not None:
             continue
         pub = _parse_date(d.get("PUBLIC_START_DATE"))
-        url = _exchange_announce_url(code)
+        url = _official_url_for(code, code2stock.get(code))
         title = "%s 即将发行（申购日 %s，尚未上市）" % (name, _fmt(pub) or "—")
         out.append({"bond_code": code, "bond_name": name, "announce_type": "即将发行",
                     "title": title,
@@ -618,8 +673,8 @@ def fetch_announcements():
     """采集全市场可转债公告。
 
     数据源：
-      - 东财行情板 b:MK0354（分页可用）：现价 + 转股溢价率 -> ratio，推算
-        强赎 / 临近强赎 / 提议下修 / 临近下修 / 不下修。
+      - 腾讯行情 qt.gtimg.cn（直连稳定）：取正股现价 + 本地 bonds 表转股价 -> ratio，
+        推算 强赎 / 临近强赎 / 提议下修 / 临近下修 / 不下修。
       - 本地 bonds 表 down_revise_json（集思录历史）：已下修。
     按 (bond_code, announce_type) 维度产出（调用方 upsert 去重）。
     返回 (count, rows)。
@@ -629,9 +684,17 @@ def fetch_announcements():
     seen = set()
     today = datetime.now().date()
 
+    # 预载 转债代码 -> 正股代码 映射（用于把「查看原文」链到东财个股公告中心）
+    code2stock = {}
+    try:
+        _rows = _load_bond_stock_map()
+        code2stock = {r[0]: r[1] for r in _rows if r[1]}
+    except Exception:
+        code2stock = {}
+
     # 0) 即将发行（东财申购日历，单独调用，失败不影响其它类别）
     try:
-        for a in fetch_upcoming_bonds():
+        for a in fetch_upcoming_bonds(code2stock):
             key = (a["bond_code"], a["announce_type"])
             if key in seen:
                 continue
@@ -640,18 +703,19 @@ def fetch_announcements():
     except Exception as e:
         print("[ann] 即将发行采集失败：%s" % e)
 
-    # 1) 行情板：强赎 / 临近强赎 / 提议下修 / 临近下修 / 不下修
-    quotes = fetch_cb_quotes()
-    print("[ann] 行情板可转债数量：%d" % len(quotes))
+    # 1) 腾讯行情：强赎 / 临近强赎 / 提议下修 / 临近下修 / 不下修
+    quotes = fetch_cb_ratios()
+    print("[ann] 行情类可转债数量：%d" % len(quotes))
     for q in quotes:
-        for a in _classify_quote(q, today):
+        for a in _classify_by_ratio(q["code"], q["name"], q.get("ratio"),
+                                    q.get("stock_code"), today):
             key = (a["bond_code"], a["announce_type"])
             if key in seen:
                 continue
             seen.add(key)
             out.append(a)
 
-    # 2) 本地 bonds 表：已下修（集思录历史）
+    # 2) 本地 bonds 表：已下修（集思录历史），best-effort 精确定位下修公告正文
     try:
         rows = get_bonds_with_down_revise()
     except Exception as e:
@@ -660,7 +724,8 @@ def fetch_announcements():
     for b in rows:
         code = b["bond_code"]
         name = b["bond_name"] or code
-        url = _exchange_announce_url(code)
+        stock_code = b.get("stock_code")
+        url = _official_url_for(code, stock_code)
         dj = b.get("down_revise_json")
         try:
             hist = _json.loads(dj) if dj else []
@@ -681,3 +746,14 @@ def fetch_announcements():
                     "title": title, "announce_date": today.strftime("%Y-%m-%d"),
                     "source": "集思录", "official_url": url})
     return len(out), out
+
+
+def _load_bond_stock_map():
+    """返回 [(bond_code, stock_code), ...]，供公告链接映射到东财个股公告中心。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT bond_code, stock_code FROM bonds "
+                "WHERE stock_code IS NOT NULL AND TRIM(stock_code) <> ''")
+    rows = cur.fetchall()
+    conn.close()
+    return rows

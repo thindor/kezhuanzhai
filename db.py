@@ -933,7 +933,7 @@ def get_bonds_with_down_revise(limit=2000):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT bond_code, bond_name, down_revise_json
+        SELECT bond_code, bond_name, down_revise_json, stock_code
         FROM bonds
         WHERE down_revise_count > 0 AND down_revise_json IS NOT NULL
           AND TRIM(down_revise_json) <> ''
