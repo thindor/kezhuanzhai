@@ -655,6 +655,12 @@ def fetch_announcements():
     seen = set()
     today = datetime.now().date()
 
+    # 交易信号标记：下修=买入信号，强赎=持仓离场信号；不强赎偏利好(买入)，
+    # 即将发行=中性观察。可按需要调整。
+    def _sig(atype):
+        return {"下修": "buy", "强赎": "sell", "不强赎": "buy",
+                "即将发行": "neutral"}.get(atype, "neutral")
+
     # 预载 转债代码 -> 正股代码 映射（用于把「查看原文」链到东财个股公告中心）
     code2stock = {}
     try:
@@ -666,6 +672,7 @@ def fetch_announcements():
     # 0) 即将发行（东财申购日历，单独调用，失败不影响其它类别）
     try:
         for a in fetch_upcoming_bonds(code2stock):
+            a.setdefault("signal", _sig(a["announce_type"]))
             key = (a["bond_code"], a["announce_type"])
             if key in seen:
                 continue
@@ -677,6 +684,7 @@ def fetch_announcements():
     # 1) akshare 集思录强赎表：强赎（已公告强赎）/ 不强赎（公告不强赎），真实事件状态
     try:
         for a in fetch_cb_redeem_akshare():
+            a.setdefault("signal", _sig(a["announce_type"]))
             key = (a["bond_code"], a["announce_type"])
             if key in seen:
                 continue
@@ -714,7 +722,8 @@ def fetch_announcements():
         seen.add(key)
         out.append({"bond_code": code, "bond_name": name, "announce_type": "下修",
                     "title": title, "announce_date": today.strftime("%Y-%m-%d"),
-                    "source": "集思录", "official_url": url})
+                    "source": "集思录", "official_url": url,
+                    "signal": _sig("下修")})
     return len(out), out
 
 

@@ -80,7 +80,7 @@ def init_db():
         stock_name  TEXT,
         viewed_at   TEXT
     )""")
-    # 可转债公告（强赎/不强赎/下修/提议下修/临近强赎/临近下修/即将发行等）
+    # 可转债公告（真实事件：强赎/不强赎/下修/即将发行；signal 为交易信号标记）
     cur.execute("""
     CREATE TABLE IF NOT EXISTS announcements (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,8 +92,14 @@ def init_db():
         source        TEXT,
         official_url  TEXT,
         updated_at    TEXT,
+        signal        TEXT,
         UNIQUE(bond_code, announce_type)
     )""")
+    # 兼容旧库：signal 列已存在时 ALTER 会抛错，忽略即可
+    try:
+        cur.execute("ALTER TABLE announcements ADD COLUMN signal TEXT")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
     # 启动即按到期日/摘牌日幂等回填退市标记（覆盖存量债券）
@@ -859,21 +865,23 @@ def get_recent_bonds(limit=12):
 # ---------------- 可转债公告 ----------------
 def upsert_announcement(a):
     """写入/更新一条公告。按 (bond_code, announce_type) 去重（覆盖式），
-    保证「临近强赎/临近下修」等状态每天重算时只更新不堆积。"""
+    保证「下修/强赎」等状态每天重算时只更新不堆积。
+    signal: 交易信号标记，buy=买入信号 / sell=持仓离场信号 / neutral=中性观察。"""
     now = _now_str()
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
     INSERT INTO announcements (bond_code, bond_name, announce_type, title,
-                               announce_date, source, official_url, updated_at)
+                               announce_date, source, official_url, signal, updated_at)
     VALUES (:bond_code, :bond_name, :announce_type, :title,
-            :announce_date, :source, :official_url, :updated_at)
+            :announce_date, :source, :official_url, :signal, :updated_at)
     ON CONFLICT(bond_code, announce_type) DO UPDATE SET
         bond_name=excluded.bond_name,
         title=excluded.title,
         announce_date=excluded.announce_date,
         source=excluded.source,
         official_url=excluded.official_url,
+        signal=excluded.signal,
         updated_at=excluded.updated_at
     """, {
         "bond_code": a.get("bond_code"),
@@ -883,6 +891,7 @@ def upsert_announcement(a):
         "announce_date": a.get("announce_date"),
         "source": a.get("source", "东财"),
         "official_url": a.get("official_url"),
+        "signal": a.get("signal", "neutral"),
         "updated_at": now,
     })
     conn.commit()

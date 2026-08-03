@@ -57,6 +57,7 @@
     {% endfor %}
   </div>
   <p class="note">数据来源：即将发行（东方财富）、强赎 / 不强赎（集思录）、下修（集思录）。点击「查看原文」跳转对应交易所（上交所 / 深交所）可转债公告披露板块。</p>
+  <p class="note">交易信号标记：<b style="color:#d4263a">买入</b> = 偏利好（如下修、不强赎）&nbsp;·&nbsp; <b style="color:#d97706">离场</b> = 持仓注意兑现（如强赎）&nbsp;·&nbsp; <b style="color:#6b7280">中性</b> = 仅观察（如即将发行）。仅供参考，非投资建议。</p>
 
   {% if rows %}
   <div class="table-wrap">
@@ -65,6 +66,7 @@
         <tr>
           <th style="width:110px">日期</th>
           <th style="width:90px">类型</th>
+          <th style="width:80px">信号</th>
           <th style="width:170px">可转债</th>
           <th>标题 / 说明</th>
           <th style="width:90px">原文</th>
@@ -75,6 +77,7 @@
         <tr>
           <td class="ann-date">{{ r.announce_date or '—' }}</td>
           <td><span class="ann-tag" style="color:{{ r._fg }};background:{{ r._bg }}">{{ r.announce_type }}</span></td>
+          <td><span class="ann-tag" style="color:{{ r._signal_fg }};background:{{ r._signal_bg }}">{{ r._signal_label }}</span></td>
           <td>
             <a class="ann-bond" href="/bond/{{ r.bond_code }}">{{ r.bond_name }}<span class="code">{{ r.bond_code }}</span></a>
           </td>

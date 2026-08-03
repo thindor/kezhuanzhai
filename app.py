@@ -461,6 +461,12 @@ ANN_TYPE_COLOR = {
     "不强赎": ("#0a7d3e", "#e7f6ee"),
     "下修": ("#1aa35a", "#e7f8ef"),
 }
+# 交易信号标记配色：buy=买入信号(红) / sell=持仓离场信号(橙) / neutral=中性观察(灰)
+ANN_SIGNAL = {
+    "buy":     ("买入", "#d4263a", "#ffeaea"),
+    "sell":    ("离场", "#d97706", "#fff3e6"),
+    "neutral": ("中性", "#6b7280", "#f0f1f3"),
+}
 
 
 @app.route("/announcements")
@@ -478,11 +484,16 @@ def announcements():
         n = counts.get(t, 0)
         if n or (atype == t):
             tabs.append({"key": t, "label": t, "n": n})
-    # 给每行补上配色标签
+    # 给每行补上配色标签与交易信号标记
     for r in rows:
         fg, bg = ANN_TYPE_COLOR.get(r.get("announce_type"), ("#555", "#f0f0f0"))
         r["_fg"] = fg
         r["_bg"] = bg
+        slabel, sfg, sbg = ANN_SIGNAL.get(r.get("signal") or "neutral",
+                                          ANN_SIGNAL["neutral"])
+        r["_signal_label"] = slabel
+        r["_signal_fg"] = sfg
+        r["_signal_bg"] = sbg
     return render_template("announcements.html", rows=rows, tabs=tabs,
                            active_type=atype, total=total)
 
