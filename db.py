@@ -6,6 +6,8 @@ from config import DB_PATH
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # 采集进程长事务写库时，让读请求等待而非直接报 "database is locked"
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -100,6 +102,17 @@ def init_db():
         cur.execute("ALTER TABLE announcements ADD COLUMN signal TEXT")
     except Exception:
         pass
+    # 每日收盘行情（转债 + 正股）：历史收盘价图表与强赎预警的数据基础
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS daily_close (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        bond_code   TEXT NOT NULL,
+        trade_date  TEXT NOT NULL,
+        bond_close  REAL,
+        stock_close REAL,
+        updated_at  TEXT,
+        UNIQUE(bond_code, trade_date)
+    )""")
     conn.commit()
     conn.close()
     # 启动即按到期日/摘牌日幂等回填退市标记（覆盖存量债券）
@@ -950,6 +963,63 @@ def get_bonds_with_down_revise(limit=2000):
         ORDER BY bond_code
         LIMIT ?
     """, (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+# ============ 每日收盘行情（转债 + 正股） ============
+
+def upsert_daily_close(bond_code, trade_date, bond_close=None, stock_close=None):
+    """写入某转债某交易日的收盘价（转债 / 正股分开设置，互不覆盖）。
+    转债与正股日K日期可能不完全对齐，故先 INSERT OR IGNORE 保证行存在，
+    再仅更新非 None 的字段（bond_close 或 stock_close）。"""
+    now = _now_str()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO daily_close(bond_code, trade_date, updated_at) VALUES(?,?,?)",
+                (bond_code, trade_date, now))
+    if bond_close is not None:
+        cur.execute("UPDATE daily_close SET bond_close=?, updated_at=? WHERE bond_code=? AND trade_date=?",
+                    (bond_close, now, bond_code, trade_date))
+    if stock_close is not None:
+        cur.execute("UPDATE daily_close SET stock_close=?, updated_at=? WHERE bond_code=? AND trade_date=?",
+                    (stock_close, now, bond_code, trade_date))
+    conn.commit()
+    conn.close()
+
+
+def get_daily_close(bond_code, days=250):
+    """返回某转债最近 days 个交易日的收盘价序列，按日期升序。
+    每项 dict(trade_date, bond_close, stock_close)。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT trade_date, bond_close, stock_close FROM daily_close
+        WHERE bond_code = ?
+        ORDER BY trade_date DESC LIMIT ?
+    """, (bond_code, days))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    rows.reverse()
+    return rows
+
+
+def get_active_trading_bonds():
+    """返回仍在交易的转债（未退市且未到期），供每日采集与强赎预警使用。
+    返回 list[dict(bond_code, bond_name, stock_code, current_transfer_price, expire_date)]。
+    """
+    import datetime as _dt
+    today = _dt.date.today().strftime("%Y-%m-%d")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT bond_code, bond_name, stock_code, current_transfer_price, expire_date
+        FROM bonds
+        WHERE COALESCE(is_delisted, 0) = 0
+          AND (expire_date IS NULL OR expire_date >= ?)
+        ORDER BY bond_code
+    """, (today,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows

@@ -69,6 +69,12 @@
   </div>
   {% endif %}
 
+  {% if redemption_warn %}
+  <div class="warn-banner {{ redemption_warn.level }}">
+    ⚠️ <b>强赎预警</b>：近 30 个交易日已有 <b>{{ redemption_warn.satisfy_cnt }}/15</b> 日正股收盘价 ≥ 转股价 130%，预计 <b>{{ redemption_warn.remaining }}</b> 个交易日内触发强赎条款。{% if redemption_warn.ratio_latest %}当前正股价 / 转股价 ≈ <b>{{ '%.2f'|format(redemption_warn.ratio_latest * 100) }}%</b>（{{ '%.3f'|format(redemption_warn.ratio_latest) }} 倍）。{% endif %}转债持有人需关注强赎风险，及时卖出或转股。
+  </div>
+  {% endif %}
+
   <div class="info-cards">
     <div class="info"><div class="num">{{ '%.2f'|format(bond.current_price) if bond.current_price else '-' }}</div><div class="label">现价(元)</div></div>
     <div class="info"><div class="num">{{ '%.2f'|format(eff_tp) if eff_tp is not none else '-' }}</div><div class="label">转股价(元)</div></div>
@@ -82,6 +88,24 @@
     <div class="stat"><div class="num">{{ latest_down_revise.meeting_date if latest_down_revise else '暂无' }}</div><div class="label">最近下修提议(股东大会)</div></div>
     <div class="stat"><div class="num small">{{ dr_updated or '本次实时采集' }}</div><div class="label">下修数据采集时间</div></div>
   </div>
+
+  <section class="panel">
+    <div class="section-head">
+      <h3>📈 历史收盘价（转债 + 正股）</h3>
+      <span class="hint">数据来源：新浪财经日K线 · 每日收盘后自动采集</span>
+      <div class="range-tabs" id="rangeTabs">
+        <button type="button" data-d="30" class="rtab">近30日</button>
+        <button type="button" data-d="90" class="rtab">近90日</button>
+        <button type="button" data-d="250" class="rtab active">近250日</button>
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="priceChart" height="320"></canvas>
+    </div>
+    {% if not daily %}
+    <p class="empty">尚无历史收盘价数据，每日收盘后自动采集（亦可在服务端运行 <code>python fetch_daily.py</code> 立即采集）。</p>
+    {% endif %}
+  </section>
 
   <section class="panel">
     <div class="section-head">
@@ -247,6 +271,46 @@
     body.innerHTML = rows;
   }
   function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-</script>
+  </script>
+  <script src="/static/js/chart.umd.min.js"></script>
+  <script>
+  var DAILY = {{ daily | tojson }};
+  var priceChart = null;
+  function renderPriceChart(days){
+    if(typeof Chart === 'undefined' || !document.getElementById('priceChart')) return;
+    var data = (DAILY || []).slice(-days);
+    var labels = data.map(function(r){ return r.trade_date; });
+    var bond = data.map(function(r){ return r.bond_close; });
+    var stock = data.map(function(r){ return r.stock_close; });
+    var ctx = document.getElementById('priceChart').getContext('2d');
+    if(priceChart) priceChart.destroy();
+    priceChart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: labels, datasets: [
+        { label: '转债收盘价', data: bond, borderColor: '#d4263a', backgroundColor: 'rgba(212,38,58,.06)', yAxisID: 'y', pointRadius: 0, borderWidth: 2, spanGaps: true },
+        { label: '正股收盘价', data: stock, borderColor: '#2f6fed', backgroundColor: 'rgba(47,111,237,.06)', yAxisID: 'y1', pointRadius: 0, borderWidth: 2, spanGaps: true }
+      ]},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          y: { position: 'left', title: { display: true, text: '转债(元)' }, grid: { drawOnChartArea: false } },
+          y1: { position: 'right', title: { display: true, text: '正股(元)' }, grid: { drawOnChartArea: false } }
+        },
+        plugins: { legend: { position: 'top' }, tooltip: {} }
+      }
+    });
+  }
+  if(DAILY && DAILY.length){
+    renderPriceChart(250);
+    document.querySelectorAll('#rangeTabs .rtab').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        document.querySelectorAll('#rangeTabs .rtab').forEach(function(x){ x.classList.remove('active'); });
+        btn.classList.add('active');
+        renderPriceChart(parseInt(btn.getAttribute('data-d'), 10));
+      });
+    });
+  }
+  </script>
 </body>
 </html>

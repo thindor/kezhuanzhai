@@ -34,7 +34,7 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 set_delisted, search_bonds,                 get_all_institutions,
                 get_institution_ranking, count_institutions,
                 upsert_announcement, get_announcements,
-                get_announcement_type_counts, clear_announcements)
+                get_announcement_type_counts, clear_announcements, get_daily_close)
 import crawler
 
 app = Flask(__name__)
@@ -440,6 +440,9 @@ def bonds_list():
     page_size = 50
     rows, total = search_bonds(code=code, delisted=delisted, has_down=has_down,
                                 down_min=down_min, sort=sort, page=page, page_size=page_size)
+    # 为当前页每只转债计算强赎预警（提前 >=5 交易日）
+    for b in rows:
+        b["redemption_warn"] = crawler.compute_redemption_warning(b["bond_code"])
     total_pages = (total + page_size - 1) // page_size
     # 分页 URL：保留全部筛选参数，仅覆盖 page
     args = dict(request.args)
@@ -571,6 +574,10 @@ def bond_detail(code):
     except (TypeError, ValueError):
         eff_tp = None
 
+    # ---- 每日收盘价历史（转债 + 正股）+ 强赎预警 ----
+    daily = get_daily_close(code, 250)
+    redemption_warn = crawler.compute_redemption_warning(code)
+
     return render_template("bond.html", bond=bond, code=code,
                            down_count=count, down_records=records,
                            dr_updated=dr_updated,
@@ -580,7 +587,9 @@ def bond_detail(code):
                            holders=holders,
                            natural_holders=natural_holders,
                            latest_down_revise=latest_down_revise,
-                           eff_tp=eff_tp)
+                           eff_tp=eff_tp,
+                           daily=daily,
+                           redemption_warn=redemption_warn)
 
 
 @app.route("/api/bond/<code>/holders")

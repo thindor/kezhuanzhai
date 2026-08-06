@@ -20,7 +20,7 @@ from datetime import datetime
 
 from config import EM_BASE, EM_HEADERS, THS_BASE
 from db import get_conn, upsert_bond, delete_holders, insert_holders, compute_delist, \
-    get_bonds_with_down_revise
+    get_bonds_with_down_revise, get_active_trading_bonds, upsert_daily_close, get_daily_close, _now_str
 
 # akshare 作为可转债事件（强赎/不强赎/下修）的兜底信息源（集思录接口在本机可用）。
 # 导入失败时降级为空实现，不影响其它爬虫。
@@ -736,3 +736,127 @@ def _load_bond_stock_map():
     rows = cur.fetchall()
     conn.close()
     return rows
+
+
+# ============ 每日收盘价采集（新浪历史日K，直连稳定） ============
+
+def _sina_symbol(code):
+    """转债/正股代码加市场前缀（新浪日K格式：sh113050 / sz123111 / sh600745 / sz000723）。
+    转债：11xxxx=沪、12xxxx=深；正股：6/9/5 开头=沪，0/2/3 开头=深。
+    注意：不能用 _market_of（仅识别转债前缀），否则沪市正股会被误标为 sz 导致取不到数据。"""
+    code = str(code or "").strip()
+    if code.startswith("11"):
+        m = "sh"
+    elif code.startswith("12"):
+        m = "sz"
+    elif code[:1] in ("6", "9", "5"):
+        m = "sh"
+    else:
+        m = "sz"
+    return m + code
+
+
+def fetch_sina_kline(code, datalen=320):
+    """新浪财经日K线，返回 list[(trade_date, close)]，按日期升序。
+    直连可用（绕开东财/腾讯限制），转债与正股均支持。"""
+    sym = _sina_symbol(code)
+    url = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
+    params = {"symbol": sym, "scale": 240, "ma": "no", "datalen": datalen}
+    try:
+        r = requests.get(url, params=params, timeout=15, proxies={"http": None, "https": None})
+        arr = r.json()
+    except Exception:
+        return []
+    out = []
+    for it in arr:
+        try:
+            out.append((it["day"], float(it["close"])))
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
+
+
+def fetch_daily_all(history=False):
+    """采集所有在交易转债及其正股的每日收盘价，写入 daily_close。
+    history=True 补全历史(320交易日)，否则增量(最近10日)。
+    每只转债用同一连接、一个事务提交（而非逐行 commit），避免海量 fsync 与锁竞争。
+    返回 (成功数, 总债数)。"""
+    bonds = get_active_trading_bonds()
+    datalen = 320 if history else 10
+    total = len(bonds)
+    ok = 0
+    conn = get_conn()
+    cur = conn.cursor()
+    for i, b in enumerate(bonds):
+        code = b["bond_code"]
+        sc = b.get("stock_code")
+        now = _now_str()
+        try:
+            for d, c in fetch_sina_kline(code, datalen):
+                cur.execute("INSERT OR IGNORE INTO daily_close(bond_code, trade_date, updated_at) VALUES(?,?,?)",
+                            (code, d, now))
+                cur.execute("UPDATE daily_close SET bond_close=?, updated_at=? WHERE bond_code=? AND trade_date=?",
+                            (c, now, code, d))
+            if sc:
+                for d, c in fetch_sina_kline(sc, datalen):
+                    cur.execute("INSERT OR IGNORE INTO daily_close(bond_code, trade_date, updated_at) VALUES(?,?,?)",
+                                (code, d, now))
+                    cur.execute("UPDATE daily_close SET stock_close=?, updated_at=? WHERE bond_code=? AND trade_date=?",
+                                (c, now, code, d))
+            conn.commit()
+            ok += 1
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print("[daily] 采集失败 %s: %s" % (code, e))
+        if (i + 1) % 50 == 0:
+            print("[daily] 进度 %d/%d" % (i + 1, total))
+        time.sleep(0.1)
+    conn.close()
+    return ok, total
+
+
+# ============ 强赎预警（提前 >=5 个交易日） ============
+
+def compute_redemption_warning(bond_code):
+    """返回单只转债强赎预警 dict 或 None（不满足预警条件）。
+    口径：滚动30交易日窗口内，正股收盘/转股价 >= 1.30 的天数 = satisfy_cnt。
+    预警：10 <= satisfy_cnt < 15（即再 <=5 天达标，提前 >=5 交易日预警）。
+    已满足(>=15)归公告模块强赎类，此处不计。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT current_transfer_price FROM bonds WHERE bond_code=?", (bond_code,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    tp = row[0]
+    try:
+        tp = float(tp)
+    except (TypeError, ValueError):
+        return None
+    if not tp or tp <= 0:
+        return None
+    rows = get_daily_close(bond_code, 30)
+    if not rows:
+        return None
+    cnt = sum(1 for r in rows if r.get("stock_close") and r["stock_close"] / tp >= 1.30)
+    if 10 <= cnt < 15:
+        remaining = 15 - cnt
+        level = "urgent" if remaining <= 2 else ("high" if remaining <= 3 else "normal")
+        last = rows[-1].get("stock_close")
+        return {"satisfy_cnt": cnt, "remaining": remaining, "warn": True,
+                "level": level, "ratio_latest": (last / tp) if last else None}
+    return None
+
+
+def compute_redemption_warnings():
+    """返回全市场强赎预警 dict：{bond_code: warn_dict}，遍历在交易转债。"""
+    res = {}
+    for b in get_active_trading_bonds():
+        w = compute_redemption_warning(b["bond_code"])
+        if w:
+            res[b["bond_code"]] = w
+    return res
