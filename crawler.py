@@ -860,3 +860,38 @@ def compute_redemption_warnings():
         if w:
             res[b["bond_code"]] = w
     return res
+
+
+def get_redemption_warning_list():
+    """返回强赎预警列表（含转债基础信息），按紧急度排序。
+    排序：先按剩余天数 remaining 升序（最紧急在前），再按最新 ratio 降序。"""
+    warns = compute_redemption_warnings()
+    if not warns:
+        return []
+    codes = list(warns.keys())
+    conn = get_conn()
+    cur = conn.cursor()
+    ph = ",".join("?" * len(codes))
+    cur.execute(
+        "SELECT bond_code, bond_name, stock_code, stock_name, "
+        "current_transfer_price, rating FROM bonds WHERE bond_code IN (%s)" % ph,
+        codes)
+    info = {r["bond_code"]: dict(r) for r in cur.fetchall()}
+    conn.close()
+    rows = []
+    for code, w in warns.items():
+        base = info.get(code, {})
+        rows.append({
+            "bond_code": code,
+            "bond_name": base.get("bond_name") or "",
+            "stock_code": base.get("stock_code") or "",
+            "stock_name": base.get("stock_name") or "",
+            "transfer_price": base.get("current_transfer_price"),
+            "rating": base.get("rating") or "",
+            "satisfy_cnt": w["satisfy_cnt"],
+            "remaining": w["remaining"],
+            "level": w["level"],
+            "ratio_latest": w["ratio_latest"],
+        })
+    rows.sort(key=lambda x: (x["remaining"], -(x["ratio_latest"] or 0)))
+    return rows

@@ -501,6 +501,13 @@ def announcements():
                            active_type=atype, total=total)
 
 
+@app.route("/redemption-warnings")
+def redemption_warnings():
+    """强赎预警单独页面：列出所有进入预警窗口（再 ≤5 个交易日触发强赎）的可转债。"""
+    rows = crawler.get_redemption_warning_list()
+    return render_template("redemption_warnings.html", rows=rows, total=len(rows))
+
+
 @app.route("/institutions")
 def institutions():
     """机构持有人完整榜单（服务端渲染，分页）。"""
