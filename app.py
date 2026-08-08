@@ -508,6 +508,16 @@ def redemption_warnings():
     return render_template("redemption_warnings.html", rows=rows, total=len(rows))
 
 
+@app.route("/down-revise-warnings")
+def down_revise_warnings():
+    """下修提醒单独页面：列出所有即将触发或已满足下修触发条件的可转债。"""
+    rows = crawler.get_down_revise_warning_list()
+    approaching = sum(1 for r in rows if r["status"] == "approaching")
+    triggered = sum(1 for r in rows if r["status"] == "triggered")
+    return render_template("down_revise_warnings.html", rows=rows,
+                           total=len(rows), approaching=approaching, triggered=triggered)
+
+
 @app.route("/institutions")
 def institutions():
     """机构持有人完整榜单（服务端渲染，分页）。"""
@@ -584,6 +594,7 @@ def bond_detail(code):
     # ---- 每日收盘价历史（转债 + 正股）+ 强赎预警 ----
     daily = get_daily_close(code, 250)
     redemption_warn = crawler.compute_redemption_warning(code)
+    down_revise_warn = crawler.compute_down_revise_warning(code)
 
     return render_template("bond.html", bond=bond, code=code,
                            down_count=count, down_records=records,
@@ -596,7 +607,8 @@ def bond_detail(code):
                            latest_down_revise=latest_down_revise,
                            eff_tp=eff_tp,
                            daily=daily,
-                           redemption_warn=redemption_warn)
+                           redemption_warn=redemption_warn,
+                           down_revise_warn=down_revise_warn)
 
 
 @app.route("/api/bond/<code>/holders")

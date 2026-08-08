@@ -895,3 +895,100 @@ def get_redemption_warning_list():
         })
     rows.sort(key=lambda x: (x["remaining"], -(x["ratio_latest"] or 0)))
     return rows
+
+
+# ============ 下修提醒（提前 >=5 个交易日） ============
+# 通用条款：转股期内，正股任意连续 30 个交易日中至少有 15 个交易日收盘价
+# 低于当期转股价的 85%（即 正股/转股价 <= 0.85）即触发下修条款，董事会「有权」提议下修。
+# 不同转债条款比例/窗口有差异（常见 80%/85%/90% × 5/10/15 日 in 10/20/30 日窗口），
+# 此处按市场最常见的 85%/15-30 测算，页面已注明「以各转债公告条款为准」。
+DOWN_REVISE_TRIGGER_RATIO = 0.85   # 下修触发比例：正股低于转股价此比例即计入达标
+DOWN_REVISE_WINDOW = 30            # 滚动窗口（交易日）
+DOWN_REVISE_THRESHOLD = 15         # 触发所需达标天数
+
+
+def compute_down_revise_warning(bond_code):
+    """返回单只转债下修提醒 dict 或 None（不满足预警条件）。
+    口径：滚动30交易日窗口内，正股收盘/转股价 <= 0.85 的天数 = satisfy_cnt。
+    预警：10 <= satisfy_cnt < 15（再 <=5 天触发，提前 >=5 交易日提示），status='approaching'；
+    已满足(>=15)归「已触发下修条件」类（status='triggered'），同样提示。
+    下修为「有权提议」（偏利好），提示语与强赎风险区分。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT current_transfer_price FROM bonds WHERE bond_code=?", (bond_code,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    tp = row[0]
+    try:
+        tp = float(tp)
+    except (TypeError, ValueError):
+        return None
+    if not tp or tp <= 0:
+        return None
+    rows = get_daily_close(bond_code, DOWN_REVISE_WINDOW)
+    if not rows:
+        return None
+    cnt = sum(1 for r in rows
+              if r.get("stock_close") and r["stock_close"] / tp <= DOWN_REVISE_TRIGGER_RATIO)
+    last = rows[-1].get("stock_close")
+    if cnt >= DOWN_REVISE_THRESHOLD:
+        return {"satisfy_cnt": cnt, "remaining": 0, "warn": True,
+                "level": "urgent", "ratio_latest": (last / tp) if last else None,
+                "status": "triggered"}
+    if 10 <= cnt < DOWN_REVISE_THRESHOLD:
+        remaining = DOWN_REVISE_THRESHOLD - cnt
+        level = "urgent" if remaining <= 2 else ("high" if remaining <= 3 else "normal")
+        return {"satisfy_cnt": cnt, "remaining": remaining, "warn": True,
+                "level": level, "ratio_latest": (last / tp) if last else None,
+                "status": "approaching"}
+    return None
+
+
+def compute_down_revise_warnings():
+    """返回全市场下修提醒 dict：{bond_code: warn_dict}，遍历在交易转债。"""
+    res = {}
+    for b in get_active_trading_bonds():
+        w = compute_down_revise_warning(b["bond_code"])
+        if w:
+            res[b["bond_code"]] = w
+    return res
+
+
+def get_down_revise_warning_list():
+    """返回下修提醒列表（含转债基础信息），按紧急度排序。
+    triggered（已满足）排最前；approaching 按 remaining 升序（最紧急在前），
+    同档按 ratio_latest 升序（正股相对转股价越低越接近触发）。"""
+    warns = compute_down_revise_warnings()
+    if not warns:
+        return []
+    codes = list(warns.keys())
+    conn = get_conn()
+    cur = conn.cursor()
+    ph = ",".join("?" * len(codes))
+    cur.execute(
+        "SELECT bond_code, bond_name, stock_code, stock_name, "
+        "current_transfer_price, rating FROM bonds WHERE bond_code IN (%s)" % ph,
+        codes)
+    info = {r["bond_code"]: dict(r) for r in cur.fetchall()}
+    conn.close()
+    rows = []
+    for code, w in warns.items():
+        base = info.get(code, {})
+        rows.append({
+            "bond_code": code,
+            "bond_name": base.get("bond_name") or "",
+            "stock_code": base.get("stock_code") or "",
+            "stock_name": base.get("stock_name") or "",
+            "transfer_price": base.get("current_transfer_price"),
+            "rating": base.get("rating") or "",
+            "satisfy_cnt": w["satisfy_cnt"],
+            "remaining": w["remaining"],
+            "level": w["level"],
+            "ratio_latest": w["ratio_latest"],
+            "status": w.get("status", "approaching"),
+        })
+    rows.sort(key=lambda x: (0 if x["status"] == "triggered" else 1,
+                             x["remaining"], x["ratio_latest"] or 0))
+    return rows

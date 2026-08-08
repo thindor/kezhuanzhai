@@ -39,6 +39,7 @@
       <a href="/institutions">机构榜</a>
       <a href="/announcements">可转债公告</a>
       <a href="/redemption-warnings">强赎预警</a>
+      <a href="/down-revise-warnings">下修提醒</a>
       <a href="/admin">管理后台</a>
     </nav>
   </header>
@@ -73,6 +74,12 @@
   {% if redemption_warn %}
   <div class="warn-banner {{ redemption_warn.level }}">
     ⚠️ <b>强赎预警</b>：近 30 个交易日已有 <b>{{ redemption_warn.satisfy_cnt }}/15</b> 日正股收盘价 ≥ 转股价 130%，预计 <b>{{ redemption_warn.remaining }}</b> 个交易日内触发强赎条款。{% if redemption_warn.ratio_latest %}当前正股价 / 转股价 ≈ <b>{{ '%.2f'|format(redemption_warn.ratio_latest * 100) }}%</b>（{{ '%.3f'|format(redemption_warn.ratio_latest) }} 倍）。{% endif %}转债持有人需关注强赎风险，及时卖出或转股。
+  </div>
+  {% endif %}
+
+  {% if down_revise_warn %}
+  <div class="revise-banner {{ down_revise_warn.level }}">
+    💡 <b>下修提醒</b>：近 30 个交易日已有 <b>{{ down_revise_warn.satisfy_cnt }}/15</b> 日正股收盘价低于转股价的 85%（下修触发价约 {{ '%.2f'|format(eff_tp|float * 0.85) if eff_tp is not none else '-' }} 元）。{% if down_revise_warn.status == 'triggered' %}已满足下修触发条件，董事会可提议向下修正转股价（对转债偏利好，关注下修博弈机会）。{% else %}预计 <b>{{ down_revise_warn.remaining }}</b> 个交易日内满足下修触发条件，提前关注下修博弈机会。{% endif %}{% if down_revise_warn.ratio_latest %}当前正股价 / 转股价 ≈ <b>{{ '%.2f'|format(down_revise_warn.ratio_latest * 100) }}%</b>。{% endif %}
   </div>
   {% endif %}
 

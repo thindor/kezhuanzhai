@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下修提醒 - 可转债持有人信息</title>
+<meta name="description" content="可转债下修提醒：基于每日收盘价，提前至少五个交易日提示即将触发向下修正转股价条款的可转债（正股持续低于转股价 85%），含转债、正股、转股价、下修触发价与达标进度。">
+<meta name="keywords" content="可转债下修提醒,转债下修,转股价修正,下修触发价,下修倒计时,下修博弈">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="{{ request.url_root }}down-revise-warnings">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <a class="brand" href="/">可转债持有人信息</a>
+    <nav>
+      <a href="/">首页</a>
+      <a href="/bonds">全部转债</a>
+      <a href="/persons">牛散榜</a>
+      <a href="/institutions">机构榜</a>
+      <a href="/announcements">可转债公告</a>
+      <a href="/redemption-warnings">强赎预警</a>
+      <a href="/down-revise-warnings">下修提醒</a>
+      <a href="/admin">管理后台</a>
+    </nav>
+  </header>
+
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">
+      <svg class="home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      首页
+    </a>
+    <span class="current">下修提醒</span>
+  </nav>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>💡 下修提醒</h2>
+      <span class="hint">共 <strong>{{ total }}</strong> 只可转债进入下修观察窗口（其中 <strong>{{ approaching }}</strong> 只即将触发、<strong>{{ triggered }}</strong> 只已满足触发条件）· 按紧急度排序</span>
+    </div>
+    <p class="note" style="margin:0 0 8px">
+      下修规则：转股期内，正股<strong>任意连续 30 个交易日中至少有 15 个交易日</strong>收盘价低于当期转股价的 <strong>85%</strong>（即正股/转股价 ≤ 0.85）即触发下修条款，董事会有权提议向下修正转股价（通常对转债偏利好）。
+      当近 30 交易日已达标 <strong>10~14 天</strong>时发出提醒——意味着再 ≤5 个交易日就可能触发，提前 ≥5 个交易日关注博弈机会；已达标 15 天及以上标记为「已触发条件，待董事会提议」。
+    </p>
+    <p class="hint" style="margin:0">
+      等级图例：
+      <span class="revise-badge urgent">已触发 / 临近</span>
+      <span class="revise-badge high">较高 · 还需 ≤3 日</span>
+      <span class="revise-badge normal">关注 · 还需 ≤5 日</span>
+      （按通用条款 15/30、触发价 = 转股价 × 85% 测算，实际比例/窗口以各转债募集说明书为准；数据基于每日收盘价采集，收盘后自动更新）
+    </p>
+  </section>
+
+  <div class="table-wrap">
+    {% if rows %}
+    <table class="rank">
+      <thead>
+        <tr>
+          <th>级别</th>
+          <th>转债</th>
+          <th>正股</th>
+          <th>评级</th>
+          <th>转股价</th>
+          <th>下修触发价<br><span class="th-sub">转股价×85%</span></th>
+          <th>正股现价</th>
+          <th>近30日达标<br><span class="th-sub">低于触发价天数</span></th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>
+            <span class="revise-badge {{ r.level }}">{% if r.status=='triggered' %}已触发{% elif r.level=='urgent' %}临近{% elif r.level=='high' %}较高{% else %}关注{% endif %}</span>
+          </td>
+          <td>
+            <a class="nm" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a>
+            <a class="link" href="/bond/{{ r.bond_code }}">{{ r.bond_name or '-' }}</a>
+          </td>
+          <td>{% if r.stock_name %}{{ r.stock_name }}（{{ r.stock_code }}）{% else %}-{% endif %}</td>
+          <td>{{ r.rating or '-' }}</td>
+          <td>{{ '%.2f'|format(r.transfer_price|float) if r.transfer_price else '-' }}</td>
+          <td>{% if r.transfer_price %}{{ '%.2f'|format(r.transfer_price|float * 0.85) }}{% else %}-{% endif %}</td>
+          <td>{% if r.ratio_latest and r.transfer_price %}{{ '%.2f'|format(r.ratio_latest * r.transfer_price|float) }}{% else %}-{% endif %}</td>
+          <td>{{ r.satisfy_cnt }}/15</td>
+          <td>
+            {% if r.status == 'triggered' %}
+              <span class="revise-badge urgent">已满足触发条件</span>
+            {% else %}
+              <span class="revise-badge {{ r.level }}">约 {{ r.remaining }} 个交易日触发</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">🎉 当前没有进入下修观察窗口的可转债。正股回升或转股价调整后此处自动清空。</p>
+    {% endif %}
+  </div>
+</div>
+</body>
+</html>
