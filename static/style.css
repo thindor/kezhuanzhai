@@ -233,6 +233,17 @@ table.rank.down-revise td { white-space:nowrap; }
 .revise-badge.high { background:#e6f7ff; color:#0958d9; border:1px solid #91d5ff; }
 .revise-badge.urgent { background:#f0f5ff; color:#1d39c4; border:1px solid #adc6ff; }
 
+/* 双低策略（轮动组合，紫色系，区别于强赎红系/下修蓝系） */
+.rotation { display:flex; gap:18px; flex-wrap:wrap; margin-top:10px; }
+.rot-col { flex:1; min-width:260px; background:#faf7ff; border:1px solid #efd9ff; border-radius:12px; padding:12px 14px; }
+.rot-col h4 { margin:0 0 8px; font-size:14px; }
+.rot-in { color:#722ed1; }
+.rot-out { color:#cf1322; }
+.rot-list { margin:0; padding-left:0; list-style:none; }
+.rot-list li { padding:5px 0; border-bottom:1px dashed #efd9ff; font-size:13.5px; }
+.rot-list li:last-child { border-bottom:none; }
+.dl-mini { display:inline-block; margin-left:6px; font-size:12px; color:#8c52cc; background:#f3e9ff; border-radius:10px; padding:1px 8px; }
+
 /* 历史收盘价图表 */
 .range-tabs { display:inline-flex; gap:6px; margin-left:auto; }
 .range-tabs .rtab { border:1px solid #d9d9d9; background:#fff; border-radius:14px; padding:4px 12px; font-size:12.5px; cursor:pointer; color:#555; transition:.15s; }

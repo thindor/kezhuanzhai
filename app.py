@@ -34,7 +34,8 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 set_delisted, search_bonds,                 get_all_institutions,
                 get_institution_ranking, count_institutions,
                 upsert_announcement, get_announcements,
-                get_announcement_type_counts, clear_announcements, get_daily_close)
+                get_announcement_type_counts, clear_announcements, get_daily_close,
+                get_double_low_change)
 import crawler
 
 app = Flask(__name__)
@@ -516,6 +517,20 @@ def down_revise_warnings():
     triggered = sum(1 for r in rows if r["status"] == "triggered")
     return render_template("down_revise_warnings.html", rows=rows,
                            total=len(rows), approaching=approaching, triggered=triggered)
+
+
+@app.route("/double-low")
+def double_low():
+    """双低策略页面：当前前 20 只双低转债 + 本周轮动进入/调出的标的。"""
+    data = get_double_low_change()
+    if data is None:
+        # 首次访问自动生成一次轮动快照
+        try:
+            crawler.rotate_double_low()
+            data = get_double_low_change()
+        except Exception:
+            data = None
+    return render_template("double_low.html", data=data)
 
 
 @app.route("/institutions")

@@ -113,6 +113,21 @@ def init_db():
         updated_at  TEXT,
         UNIQUE(bond_code, trade_date)
     )""")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS double_low_log (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        week_start   TEXT NOT NULL,
+        rank         INTEGER,
+        bond_code    TEXT NOT NULL,
+        bond_name    TEXT,
+        stock_name   TEXT,
+        rating       TEXT,
+        double_low   REAL,
+        bond_price   REAL,
+        premium_rate REAL,
+        updated_at   TEXT
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_double_low_week ON double_low_log(week_start)")
     conn.commit()
     conn.close()
     # 启动即按到期日/摘牌日幂等回填退市标记（覆盖存量债券）
@@ -1023,3 +1038,88 @@ def get_active_trading_bonds():
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+# ============ 双低策略轮动快照 ============
+
+def get_latest_quotes(bond_code):
+    """返回某转债最新非空转债价与正股价（分别取各自最近交易日，互不对齐）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    bc = cur.execute(
+        "SELECT bond_close FROM daily_close WHERE bond_code=? AND bond_close IS NOT NULL "
+        "ORDER BY trade_date DESC LIMIT 1", (bond_code,)).fetchone()
+    sc = cur.execute(
+        "SELECT stock_close FROM daily_close WHERE bond_code=? AND stock_close IS NOT NULL "
+        "ORDER BY trade_date DESC LIMIT 1", (bond_code,)).fetchone()
+    conn.close()
+    return {"bond_close": bc[0] if bc else None, "stock_close": sc[0] if sc else None}
+
+
+def save_double_low_snapshot(week_start, rows):
+    """幂等写入某周某次轮动的前 N 只双低转债快照（先删后插）。
+    rows: list[dict(rank, bond_code, bond_name, stock_name, rating,
+                    double_low, bond_price, premium_rate)]。"""
+    now = _now_str()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM double_low_log WHERE week_start=?", (week_start,))
+    for r in rows:
+        cur.execute("""
+            INSERT INTO double_low_log
+                (week_start, rank, bond_code, bond_name, stock_name, rating,
+                 double_low, bond_price, premium_rate, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (week_start, r.get("rank"), r.get("bond_code"), r.get("bond_name"),
+              r.get("stock_name"), r.get("rating"), r.get("double_low"),
+              r.get("bond_price"), r.get("premium_rate"), now))
+    conn.commit()
+    conn.close()
+
+
+def get_latest_double_low():
+    """返回最近一次轮动（week_start 最大）的前 20 只快照，按 rank 升序。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    ws = cur.execute(
+        "SELECT week_start FROM double_low_log GROUP BY week_start "
+        "ORDER BY week_start DESC LIMIT 1").fetchone()
+    if not ws:
+        conn.close()
+        return None
+    rows = [dict(r) for r in cur.execute(
+        "SELECT rank, bond_code, bond_name, stock_name, rating, "
+        "double_low, bond_price, premium_rate FROM double_low_log "
+        "WHERE week_start=? ORDER BY rank", (ws[0],)).fetchall()]
+    conn.close()
+    return {"week_start": ws[0], "rows": rows}
+
+
+def get_double_low_change():
+    """返回最新一次轮动相对上一次的变更：{week_start, prev_week_start, current, entered, exited}。
+    若无任何快照返回 None；只有一次快照时 entered=全部、exited=空。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    weeks = [r[0] for r in cur.execute(
+        "SELECT DISTINCT week_start FROM double_low_log ORDER BY week_start DESC").fetchall()]
+    if not weeks:
+        conn.close()
+        return None
+    latest_ws = weeks[0]
+    prev_ws = weeks[1] if len(weeks) > 1 else None
+
+    def _load(ws):
+        return [dict(r) for r in cur.execute(
+            "SELECT rank, bond_code, bond_name, stock_name, rating, "
+            "double_low, bond_price, premium_rate FROM double_low_log "
+            "WHERE week_start=? ORDER BY rank", (ws,)).fetchall()]
+
+    latest_rows = _load(latest_ws)
+    prev_rows = _load(prev_ws) if prev_ws else []
+    conn.close()
+    latest_codes = {r["bond_code"] for r in latest_rows}
+    prev_codes = {r["bond_code"] for r in prev_rows}
+    entered = [r for r in latest_rows if r["bond_code"] not in prev_codes]
+    exited = [r for r in prev_rows if r["bond_code"] not in latest_codes]
+    return {"week_start": latest_ws, "prev_week_start": prev_ws,
+            "current": latest_rows, "entered": entered, "exited": exited}

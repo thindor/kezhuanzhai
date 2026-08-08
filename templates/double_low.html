@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双低策略 - 可转债持有人信息</title>
+<meta name="description" content="可转债双低策略：筛选价格低且转股溢价率低的转债，双低值=价格+转股溢价率%，每周轮动，记录本周进入与调出的标的。">
+<meta name="keywords" content="可转债双低策略,双低值,转股溢价率,转债轮动,低价转债,低溢价">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="{{ request.url_root }}double-low">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <a class="brand" href="/">可转债持有人信息</a>
+    <nav>
+      <a href="/">首页</a>
+      <a href="/bonds">全部转债</a>
+      <a href="/persons">牛散榜</a>
+      <a href="/institutions">机构榜</a>
+      <a href="/announcements">可转债公告</a>
+      <a href="/redemption-warnings">强赎预警</a>
+      <a href="/down-revise-warnings">下修提醒</a>
+      <a href="/double-low">双低策略</a>
+      <a href="/admin">管理后台</a>
+    </nav>
+  </header>
+
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">
+      <svg class="home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      首页
+    </a>
+    <span class="current">双低策略</span>
+  </nav>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>📊 双低策略</h2>
+      <span class="hint">双低值 = 转债价格 + 转股溢价率(%) · 取全市场最低 20 只 · 每周轮动一次</span>
+    </div>
+    <p class="note" style="margin:0 0 8px">
+      双低策略通过「<strong>价格低 + 转股溢价率低</strong>」筛选标的，兼顾<strong>债底安全</strong>与<strong>股性弹性</strong>：
+      价格低→向下有债底保护；溢价率低→正股上涨时跟涨紧密。
+      <strong>双低值 = 转债价格 + 转股溢价率(%)</strong>（数值越低越优），按双低值升序取前 20 只，每周轮动，通过定期调仓获取稳健收益。
+    </p>
+    <p class="hint" style="margin:0">
+      数据说明：转债价与正股价取每日收盘采集的最新收盘价（缺失时兜底实时库），转股溢价率 = (转债价 / 转股价值 − 1) × 100%，转股价值 = 100 / 转股价 × 正股价。双低组合不含已公告强赎/退市的转债；轮动快照每周一收盘后更新。
+    </p>
+  </section>
+
+  {% if data %}
+  <section class="panel">
+    <div class="panel-head">
+      <h3>🔄 本周轮动（{{ data.week_start }} 当周）</h3>
+      {% if data.prev_week_start %}<span class="hint">对比上期：{{ data.prev_week_start }}</span>{% endif %}
+    </div>
+    <div class="rotation">
+      <div class="rot-col">
+        <h4 class="rot-in">🟢 本周进入（{{ data.entered|length }} 只）</h4>
+        {% if data.entered %}
+        <ul class="rot-list">
+          {% for r in data.entered %}
+          <li><a class="nm" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a> {{ r.bond_name or '-' }} <span class="dl-mini">双低 {{ '%.2f'|format(r.double_low|float) }}</span></li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="empty small">本周无新进入标的（组合与上期一致）。</p>
+        {% endif %}
+      </div>
+      <div class="rot-col">
+        <h4 class="rot-out">🔴 本周调出（{{ data.exited|length }} 只）</h4>
+        {% if data.exited %}
+        <ul class="rot-list">
+          {% for r in data.exited %}
+          <li><a class="nm" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a> {{ r.bond_name or '-' }} <span class="dl-mini">双低 {{ '%.2f'|format(r.double_low|float) }}</span></li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="empty small">本周无调出标的（组合与上期一致）。</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <div class="table-wrap">
+    <table class="rank">
+      <thead>
+        <tr>
+          <th>排名</th>
+          <th>转债</th>
+          <th>正股</th>
+          <th>评级</th>
+          <th>双低值</th>
+          <th>转债价</th>
+          <th>转股溢价率</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in data.current %}
+        <tr>
+          <td>{{ r.rank }}</td>
+          <td>
+            <a class="nm" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a>
+            <a class="link" href="/bond/{{ r.bond_code }}">{{ r.bond_name or '-' }}</a>
+          </td>
+          <td>{% if r.stock_name %}{{ r.stock_name }}{% else %}-{% endif %}</td>
+          <td>{{ r.rating or '-' }}</td>
+          <td><b>{{ '%.2f'|format(r.double_low|float) }}</b></td>
+          <td>{{ '%.2f'|format(r.bond_price|float) }}</td>
+          <td>{{ '%.2f'|format(r.premium_rate|float) }}%</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">⚠️ 暂无可展示的双低组合，请运行一次轮动采集（rotate_double_low.py）后重试。</p>
+  {% endif %}
+</div>
+</body>
+</html>

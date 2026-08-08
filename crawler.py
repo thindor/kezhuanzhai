@@ -20,7 +20,8 @@ from datetime import datetime
 
 from config import EM_BASE, EM_HEADERS, THS_BASE
 from db import get_conn, upsert_bond, delete_holders, insert_holders, compute_delist, \
-    get_bonds_with_down_revise, get_active_trading_bonds, upsert_daily_close, get_daily_close, _now_str
+    get_bonds_with_down_revise, get_active_trading_bonds, upsert_daily_close, get_daily_close, \
+    get_bond, get_latest_quotes, save_double_low_snapshot, get_latest_double_low, get_double_low_change, _now_str
 
 # akshare 作为可转债事件（强赎/不强赎/下修）的兜底信息源（集思录接口在本机可用）。
 # 导入失败时降级为空实现，不影响其它爬虫。
@@ -992,3 +993,102 @@ def get_down_revise_warning_list():
     rows.sort(key=lambda x: (0 if x["status"] == "triggered" else 1,
                              x["remaining"], x["ratio_latest"] or 0))
     return rows
+
+
+# ============ 双低策略 ============
+
+def compute_double_low_list(topn=20):
+    """计算双低值并排序取前 topn。
+
+    双低值 = 转债价格 + 转股溢价率(%)   （经典双低公式，数值越低越优）
+    转股价值 = 100 / 转股价 × 正股价
+    转股溢价率(%) = (转债价格 / 转股价值 - 1) × 100
+
+    价格取 daily_close 最新收盘价（兜底 bonds.current_price）；正股价取 daily_close 最新收盘价。
+    仅纳入在交易转债；转股价/价格/正股价任一缺失或非法则跳过。
+    """
+    res = []
+    for b in get_active_trading_bonds():
+        code = b["bond_code"]
+        try:
+            tp = float(b.get("current_transfer_price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if tp <= 0:
+            continue
+        g = get_bond(code)
+        if not g:
+            continue
+        q = get_latest_quotes(code)
+        # 转债价
+        bp = None
+        try:
+            if q.get("bond_close") is not None:
+                bp = float(q["bond_close"])
+        except (TypeError, ValueError):
+            bp = None
+        if not bp or bp <= 0:
+            cp = g.get("current_price")
+            try:
+                if cp and float(cp) > 0:
+                    bp = float(cp)
+            except (TypeError, ValueError):
+                bp = None
+        if not bp or bp <= 0:
+            continue
+        # 正股价
+        sc = None
+        try:
+            if q.get("stock_close") is not None:
+                sc = float(q["stock_close"])
+        except (TypeError, ValueError):
+            sc = None
+        if not sc or sc <= 0:
+            continue
+        try:
+            conv_value = 100.0 / tp * sc
+            premium = (bp / conv_value - 1.0) * 100.0
+            dl = bp + premium
+        except (ZeroDivisionError, ValueError):
+            continue
+        if dl != dl or dl in (float("inf"), float("-inf")):
+            continue
+        res.append({
+            "bond_code": code,
+            "bond_name": g.get("bond_name"),
+            "stock_name": g.get("stock_name"),
+            "rating": g.get("rating"),
+            "double_low": round(dl, 2),
+            "bond_price": round(bp, 2),
+            "premium_rate": round(premium, 2),
+        })
+    res.sort(key=lambda x: x["double_low"])
+    return res[:topn]
+
+
+def rotate_double_low():
+    """每周轮动：计算当前前 20 双低，对比上次快照得出进入/调出，并写入 DB。
+
+    返回 dict(week_start, prev_week_start, current, entered, exited)。
+    week_start 取本周一日期（避免同一周内重复运行时产生多份快照）。
+    """
+    import datetime as _dt
+    today = _dt.date.today()
+    monday = today - _dt.timedelta(days=today.weekday())
+    week_start = monday.strftime("%Y-%m-%d")
+    current = compute_double_low_list(20)
+    for i, r in enumerate(current, 1):
+        r["rank"] = i
+    prev = get_latest_double_low()
+    prev_codes = {r["bond_code"] for r in prev["rows"]} if prev else set()
+    cur_codes = {r["bond_code"] for r in current}
+    entered = [r for r in current if r["bond_code"] not in prev_codes]
+    exited = [r for r in prev["rows"] if r["bond_code"] not in cur_codes] if prev else []
+    save_double_low_snapshot(week_start, current)
+    return {
+        "week_start": week_start,
+        "prev_week_start": prev["week_start"] if prev else None,
+        "current": current,
+        "entered": entered,
+        "exited": exited,
+    }
