@@ -324,6 +324,15 @@ def crawl_bond(code, use_ths=True):
     holders_raw = fetch_holders(secucode)
     price = _fetch_price(core)  # 现价（元/张），失败为 None -> 按面值估算
 
+    # 同步刷新历史收盘价：此前单只更新只刷持有人、漏了行情，导致详情页图表不更新。
+    # 已退市债不再更新行情（与详情页「冻结」口径一致）；存量不足 30 个交易日则补全历史。
+    if not (basic and basic.get("is_delisted")):
+        try:
+            existing = get_daily_close(core, 250)
+            fetch_daily_one(core, basic.get("stock_code"), history=(len(existing) < 30))
+        except Exception as e:
+            print("[daily] 单只行情同步失败 %s: %s" % (core, e))
+
     if not holders_raw:
         return {"ok": False,
                 "message": "未获取到十大持有人数据，请确认代码 %s 是否为已上市可转债" % core,
@@ -817,6 +826,39 @@ def fetch_daily_all(history=False):
         time.sleep(0.1)
     conn.close()
     return ok, total
+
+
+def fetch_daily_one(code, stock_code=None, history=False):
+    """采集【单只】转债及其正股的每日收盘价并写入 daily_close。
+
+    供详情页「更新数据」按钮（crawl_bond 单只刷新）复用：此前单只更新只刷持有人、
+    漏刷了历史收盘价，导致详情页图表不更新。本函数与 fetch_daily_all 共用
+    fetch_sina_kline + upsert_daily_close，保证口径与全量采集完全一致。
+
+    参数：
+      stock_code: 正股代码；可不传，缺省时从本地 bonds 表取（首次抓取尚未入库时为 None）。
+      history:    True 补全历史(320交易日)，False 仅增量(最近10日)。
+    返回：(写入笔数, 说明)。
+    """
+    if stock_code is None:
+        b = get_bond(code)
+        stock_code = b.get("stock_code") if b else None
+    datalen = 320 if history else 10
+    n = 0
+    try:
+        for d, c in fetch_sina_kline(code, datalen):
+            upsert_daily_close(code, d, bond_close=c)
+            n += 1
+    except Exception as e:
+        print("[daily] 单只转债行情失败 %s: %s" % (code, e))
+    if stock_code:
+        try:
+            for d, c in fetch_sina_kline(stock_code, datalen):
+                upsert_daily_close(code, d, stock_close=c)
+                n += 1
+        except Exception as e:
+            print("[daily] 单只正股行情失败 %s: %s" % (stock_code, e))
+    return n, "ok"
 
 
 # ============ 强赎预警（提前 >=5 个交易日） ============
