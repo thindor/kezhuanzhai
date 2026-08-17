@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ data.bond_name }} ({{ code }}) 转债体检卡 - 实时数据分析</title>
+<meta name="description" content="{{ data.bond_name }} 可转债体检卡：实时分析债底、YTM、转股溢价率、强赎/下修状态与持有人结构，提炼核心投资要素。">
+<link rel="stylesheet" href="/static/style.css?v=8">
+<style>
+  .ck-head { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:6px 0 14px; }
+  .ck-head h2 { margin:0; font-size:20px; font-weight:600; }
+  .ck-head .code { font-size:13px; color:#888; margin-left:6px; font-weight:400; }
+  .ck-price { font-size:22px; font-weight:600; }
+  .ck-price .pct { font-size:14px; font-weight:500; margin-left:8px; }
+  .up { color:#d4263a; } .down { color:#1a9e5f; } .flat { color:#6b7280; }
+  .ck-actions { margin-left:auto; display:flex; gap:10px; }
+  .ck-btn { border:1px solid #d0d7de; background:#fff; border-radius:18px; padding:7px 16px;
+    font-size:13.5px; cursor:pointer; font-weight:600; transition:.15s; text-decoration:none; color:#185fa5; }
+  .ck-btn:hover { background:#f0f6ff; }
+  .ck-btn:disabled { opacity:.6; cursor:default; }
+  .ck-updated { font-size:12px; color:#888; width:100%; text-align:right; margin-top:-6px; }
+
+  .conclusion { background:#f8fafc; border:1px solid #cbd5e1; border-radius:14px; padding:14px 16px; margin:10px 0 18px; }
+  .conclusion h3 { margin:0 0 10px; font-size:14px; color:#334155; }
+  .concl-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  .concl { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; }
+  .concl .tag { font-size:12px; color:#64748b; font-weight:600; }
+  .concl .val { font-size:15px; font-weight:600; margin:4px 0 2px; }
+  .concl .desc { font-size:12px; color:#475569; line-height:1.5; }
+
+  .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .card { border-radius:14px; padding:0; overflow:hidden; background:#fff; border:1px solid #e5e7eb; }
+  .card .ch { padding:10px 14px; font-weight:600; font-size:14px; }
+  .card .cb { padding:10px 14px 14px; }
+  .card.teal .ch { background:#E1F5EE; color:#0F6E56; border-bottom:1px solid #5DCAA5; }
+  .card.blue .ch { background:#E6F1FB; color:#185FA5; border-bottom:1px solid #85B7EB; }
+  .card.amber .ch { background:#FAEEDA; color:#854F0B; border-bottom:1px solid #EF9F27; }
+  .card.gray .ch { background:#F1EFE8; color:#444441; border-bottom:1px solid #B4B2A9; }
+  .row { display:flex; justify-content:space-between; align-items:baseline; padding:6px 0; border-bottom:1px dashed #eef1f4; }
+  .row:last-child { border-bottom:none; }
+  .row .k { font-size:13px; color:#64748b; }
+  .row .v { font-size:14px; font-weight:600; color:#1f2937; }
+  .row .v small { font-size:11px; color:#94a3b8; font-weight:400; }
+  .warn-line { font-size:12.5px; color:#475569; margin-top:8px; line-height:1.55; }
+  .warn-urgent { color:#d4263a; } .warn-high { color:#d97706; } .warn-normal { color:#0a7d3e; }
+
+  .holder-card { margin-top:14px; }
+  .drive { font-size:12.5px; line-height:1.6; color:#475569; margin-top:8px; }
+  .drive b { color:#0F6E56; }
+
+  .note { font-size:12px; color:#94a3b8; margin-top:18px; line-height:1.6; }
+  @media (max-width: 880px){
+    .cards { grid-template-columns:1fr; }
+    .concl-grid { grid-template-columns:repeat(2,1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <a class="brand" href="/">可转债持有人信息</a>
+    <nav>
+      <a href="/">首页</a>
+      <a href="/bonds">全部转债</a>
+      <a href="{{ url_for('persons') }}">牛散榜</a>
+      <a href="/institutions">机构榜</a>
+      <a href="/announcements">可转债公告</a>
+      <a href="/redemption-warnings">强赎预警</a>
+      <a href="/down-revise-warnings">下修提醒</a>
+      <a href="/double-low">双低策略</a>
+      <a href="/admin">管理后台</a>
+    </nav>
+  </header>
+
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">首页</a>
+    <a href="{{ url_for('bond_detail', code=code) }}">{{ data.bond_name or code }}</a>
+    <span class="current">转债体检卡</span>
+  </nav>
+
+  <div class="ck-head">
+    <h2>{{ data.bond_name }} <span class="code">{{ code }}</span>{% if data.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}</h2>
+    <span class="ck-price" id="bondPrice">{{ '%.2f'|format(data.bond_price) if data.bond_price is not none else '—' }}</span>
+    <span class="pct {{ 'up' if (data.bond_pct is not none and data.bond_pct > 0) else ('down' if (data.bond_pct is not none and data.bond_pct < 0) else 'flat') }}" id="bondPct">{% if data.bond_pct is not none %}{{ '+' if data.bond_pct > 0 else '' }}{{ '%.2f'|format(data.bond_pct) }}%{% else %}—{% endif %}</span>
+    <div class="ck-actions">
+      <a class="ck-btn" href="{{ url_for('bond_detail', code=code) }}">← 返回详情</a>
+      {% if not data.is_delisted %}<button class="ck-btn" id="refreshBtn" onclick="refreshRealtime()">🔄 刷新实时行情</button>{% endif %}
+    </div>
+    <div class="ck-updated" id="rtUpdated">数据时间：{{ data.updated_at }} · 来源：{{ data.source }}</div>
+  </div>
+
+  <!-- 核心结论：抓牛鼻子 -->
+  <div class="conclusion">
+    <h3>🩺 核心结论（抓牛鼻子）</h3>
+    <div class="concl-grid">
+      <div class="concl">
+        <div class="tag">① 定基调</div>
+        <div class="val">{{ data.tier_name }}</div>
+        <div class="desc">{{ data.tier_desc }}</div>
+      </div>
+      <div class="concl">
+        <div class="tag">② 安全垫</div>
+        <div class="val">{% if data.ytm is not none %}YTM {{ '%.2f'|format(data.ytm) }}%{% elif data.pure_value is not none %}债底 {{ '%.2f'|format(data.pure_value) }}{% else %}—{% endif %}</div>
+        <div class="desc">{{ data.safety or '—' }}</div>
+      </div>
+      <div class="concl">
+        <div class="tag">③ 弹性</div>
+        <div class="val">{% if data.premium is not none %}溢价 {{ '%.2f'|format(data.premium) }}%{% else %}—{% endif %}</div>
+        <div class="desc">{{ data.elasticity or '—' }}</div>
+      </div>
+      <div class="concl">
+        <div class="tag">④ 天花板</div>
+        <div class="val">{% if data.upside_to_redeem is not none %}距强赎 +{{ '%.1f'|format(data.upside_to_redeem) }}%{% else %}—{% endif %}</div>
+        <div class="desc">{{ data.down_potential or '—' }}{% if data.holder and data.holder.is_controller %}；大股东持仓，促转股动力强{% endif %}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 三维指标卡 -->
+  <div class="cards">
+    <!-- 债性 -->
+    <div class="card teal">
+      <div class="ch">🛡️ 债性 · 防守（保底）</div>
+      <div class="cb">
+        <div class="row"><span class="k">纯债价值(债底)</span><span class="v">{% if data.pure_value is not none %}{{ '%.2f'|format(data.pure_value) }}<small> 元</small>{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">到期收益率 YTM</span><span class="v">{% if data.ytm is not none %}{{ '%.2f'|format(data.ytm) }}%{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">到期赎回价</span><span class="v">{% if data.redeem_price is not none %}{{ '%.2f'|format(data.redeem_price) }}<small> 元</small>{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">剩余年限</span><span class="v">{% if data.year_left is not none %}{{ '%.2f'|format(data.year_left) }}<small> 年</small>{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">余额</span><span class="v">{% if data.balance is not none %}{{ '%.2f'|format(data.balance) }}<small> 亿</small>{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">市净率 PB</span><span class="v">{% if data.pb is not none %}{{ '%.2f'|format(data.pb) }}{% else %}—{% endif %}</span></div>
+        <div class="warn-line">评级：<b>{{ data.rating or '—' }}</b> · 违约风险是债底成立的前提，低评级需重点排查。</div>
+      </div>
+    </div>
+
+    <!-- 股性 -->
+    <div class="card blue">
+      <div class="ch">📈 股性 · 进攻（弹性）</div>
+      <div class="cb">
+        <div class="row"><span class="k">转债现价</span><span class="v">{{ '%.2f'|format(data.bond_price) if data.bond_price is not none else '—' }}<small> 元</small></span></div>
+        <div class="row"><span class="k">正股现价</span><span class="v"><span id="stockPrice">{{ '%.2f'|format(data.stock_price) if data.stock_price is not none else '—' }}</span><small> 元</small>{% if data.stock_pct is not none %} <span id="stockPct" class="{{ 'up' if data.stock_pct > 0 else ('down' if data.stock_pct < 0 else 'flat') }}">{{ '+' if data.stock_pct > 0 else '' }}{{ '%.2f'|format(data.stock_pct) }}%</span>{% endif %}</span></div>
+        <div class="row"><span class="k">转股价</span><span class="v">{% if data.transfer_price is not none %}{{ '%.3f'|format(data.transfer_price) }}<small> 元</small>{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">转股价值</span><span class="v" id="convValue">{% if data.convert_value is not none %}{{ '%.2f'|format(data.convert_value) }}{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">转股溢价率</span><span class="v" id="premium">{% if data.premium is not none %}{{ '%.2f'|format(data.premium) }}%{% else %}—{% endif %}</span></div>
+        <div class="warn-line">溢价率越低越跟涨正股；高溢价偏债、弹性弱。</div>
+      </div>
+    </div>
+
+    <!-- 条款博弈 -->
+    <div class="card amber">
+      <div class="ch">🎯 条款 · 超额收益</div>
+      <div class="cb">
+        <div class="row"><span class="k">强赎触发价</span><span class="v">{% if data.force_redeem_price is not none %}{{ '%.2f'|format(data.force_redeem_price) }}<small> 元</small>{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">距强赎空间</span><span class="v">{% if data.upside_to_redeem is not none %}{{ '+' if data.upside_to_redeem > 0 else '' }}{{ '%.1f'|format(data.upside_to_redeem) }}%{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">回售触发价</span><span class="v">{% if data.put_convert_price is not none %}{{ '%.2f'|format(data.put_convert_price) }}<small> 元</small>{% else %}—{% endif %}</span></div>
+        {% if data.redeem_warn %}
+        <div class="warn-line warn-{{ data.redeem_warn.level }}">⚠️ 强赎预警：近30日 {{ data.redeem_warn.satisfy_cnt }}/15 日正股≥转股价130%，约 {{ data.redeem_warn.remaining }} 交易日触发。</div>
+        {% endif %}
+        {% if data.revise_warn %}
+        <div class="warn-line warn-{{ data.revise_warn.level }}">💡 下修提醒：近30日 {{ data.revise_warn.satisfy_cnt }}/15 日正股低于转股价85%{% if data.revise_warn.status == 'triggered' %}（已满足下修条件）{% else %}，约 {{ data.revise_warn.remaining }} 交易日触发{% endif %}。</div>
+        {% endif %}
+        {% if not data.redeem_warn and not data.revise_warn %}
+        <div class="warn-line">当前未触发强赎/下修预警条件。</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- 持有人结构 -->
+  <div class="card gray holder-card">
+    <div class="ch">👥 持有人结构（促转股动力）</div>
+    <div class="cb">
+      {% if data.holder %}
+      <div class="row"><span class="k">最新期（{{ data.holder.period }}）</span><span class="v">机构 {{ data.holder.institution }} · 牛散 {{ data.holder.natural }}</span></div>
+      <div class="row"><span class="k">第一大持有人</span><span class="v">{{ data.holder.top_holder or '—' }}{% if data.holder.is_controller %} <small>（疑似控股股东）</small>{% endif %}</span></div>
+      <div class="row"><span class="k">机构持仓占比</span><span class="v">{% if data.holder.institution_ratio is not none %}{{ '%.2f'|format(data.holder.institution_ratio) }}%{% else %}—{% endif %}</span></div>
+      <div class="drive">
+        {% if data.holder.is_controller %}🟢 第一大持有人为<b>控股股东/国资</b>，下修与促转股意愿通常最强，博弈超额收益的天花板更高。{% elif data.holder.institution and data.holder.institution >= 6 %}🟡 机构占据多数席位，筹码偏机构，下修博弈看公司意愿。{% else %}⚪ 持有人以牛散/分散为主，条款博弈不确定性较高。{% endif %}
+      </div>
+      {% else %}
+      <div class="warn-line">该转债暂无十大持有人采集数据（可在管理后台更新）。</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <p class="note">
+    数据来源：东方财富（自算债底/YTM、票面利率/赎回价/转股价/评级/到期/余额，全量覆盖）+ 集思录实时（精确债底/YTM/评级/PB/强赎回售触发价增强）+ 腾讯行情（转债与正股实时价、涨跌幅）+ 本地库（十大持有人结构）。
+    强赎/下修预警口径与全站一致（滚动30交易日，按市场通用 85%/15-30 测算）。
+    债底、YTM、强赎/回售触发价等以各转债公告条款为准；投资有风险，本卡仅供分析参考，不构成建议。
+  </p>
+</div>
+
+<script>
+function setNum(id, v){ var el=document.getElementById(id); if(el) el.textContent = (v==null?'—':(typeof v==='number'?v.toFixed(2):v)); }
+function setPct(id, v){
+  var el=document.getElementById(id); if(!el) return;
+  if(v==null){ el.textContent='—'; el.className='pct'; return; }
+  var up=v>0, down=v<0;
+  el.textContent=(up?'+':'')+v+'%';
+  el.className='pct '+(up?'up':(down?'down':'flat'));
+}
+function refreshRealtime(){
+  var btn=document.getElementById('refreshBtn');
+  btn.disabled=true; btn.textContent='刷新中...';
+  fetch('/api/bond/' + encodeURIComponent("{{ code }}") + '/realtime')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d && d.ok){
+        setNum('bondPrice', d.bond_price);
+        setPct('bondPct', d.bond_pct);
+        setNum('stockPrice', d.stock_price);
+        setPct('stockPct', d.stock_pct);
+        setNum('convValue', d.convert_value);
+        setNum('premium', d.premium);
+        document.getElementById('rtUpdated').textContent = '实时更新：' + d.updated_at + ' · 来源：腾讯行情(实时)';
+      } else { alert((d&&d.message)||'刷新失败'); }
+    })
+    .catch(function(e){ alert('请求出错：'+e.message); })
+    .finally(function(){ btn.disabled=false; btn.textContent='🔄 刷新实时行情'; });
+}
+</script>
+</body>
+</html>

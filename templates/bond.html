@@ -16,6 +16,11 @@
     color:#a16207; border-radius:18px; padding:7px 16px; font-size:13.5px; cursor:pointer; font-weight:600; transition:.15s; }
   .update-bar .update-btn:hover { background:#fff7e6; }
   .update-bar .update-btn:disabled { opacity:.6; cursor:default; }
+  .bond-head h2 { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+  .checkup-link { font-size:13px; font-weight:600; color:#0f6e56; background:#e1f5ee;
+    border:1px solid #5dcaa5; border-radius:16px; padding:5px 14px; text-decoration:none;
+    margin-left:4px; transition:.15s; white-space:nowrap; }
+  .checkup-link:hover { background:#cdeede; }
 </style>
 <script type="application/ld+json">
 {
@@ -55,7 +60,7 @@
   </nav>
 
   <div class="bond-head">
-    <h2>{{ bond.bond_name or '未知转债' }} <span class="code">{{ code }}</span>{% if bond.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}</h2>
+    <h2>{{ bond.bond_name or '未知转债' }} <span class="code">{{ code }}</span>{% if bond.is_delisted %} <span class="delist-badge">已退市</span>{% endif %} <a class="checkup-link" href="{{ url_for('bond_checkup', code=code) }}">🩺 转债体检卡</a></h2>
     <p class="sub">正股：{{ bond.stock_name or '-' }}（{{ bond.stock_code or '-' }}）· 评级：{{ bond.rating or '-' }} · 数据来源：{{ bond.data_source or '东方财富' }}</p>
   </div>
 

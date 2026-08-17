@@ -37,6 +37,7 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 get_announcement_type_counts, clear_announcements, get_daily_close,
                 get_double_low_change)
 import crawler
+import checkup
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -820,6 +821,35 @@ def admin_delisted(code):
         ddate = b.get("expire_date") or b.get("delist_date")
     set_delisted(code, val == 1, ddate)
     return jsonify({"ok": True, "bond_code": code, "is_delisted": val})
+
+
+@app.route("/bond/<code>/checkup")
+def bond_checkup(code):
+    """转债体检卡：实时数据分析 + 核心要素提炼。详情页入口跳转至此。"""
+    real = resolve_query(code)
+    if not real:
+        abort(404)
+    code = real
+    bond = get_bond(code)
+    if not bond:
+        abort(404)
+    data = checkup.get_checkup(code)
+    if not data:
+        abort(404)
+    return render_template("checkup.html", data=data, code=code)
+
+
+@app.route("/api/bond/<code>/realtime")
+def api_bond_realtime(code):
+    """仅刷新体检卡的实时行情（腾讯秒级），供前端局部无刷新更新。"""
+    real = resolve_query(code)
+    if not real:
+        return jsonify({"ok": False, "message": "未找到该转债"}), 404
+    code = real
+    rt = checkup.get_realtime(code)
+    if not rt:
+        return jsonify({"ok": False, "message": "未找到该转债"}), 404
+    return jsonify({"ok": True, **rt})
 
 
 if __name__ == "__main__":
