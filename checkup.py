@@ -545,7 +545,9 @@ def get_checkup(code):
 
 
 def get_realtime(code):
-    """仅刷新实时行情部分（腾讯），返回供前端局部无刷新更新。"""
+    """仅刷新实时行情部分（腾讯），返回供前端局部无刷新更新。
+    若纯债价值/到期赎回价在东财缓存中缺失（首载冷启动网络失败），顺带重试
+    单只补取并回填缓存，供前端一并更新。"""
     bond = get_bond(code)
     if not bond:
         return None
@@ -564,6 +566,39 @@ def get_realtime(code):
         conv_value = 100.0 / tp * sp
         if conv_value > 0:
             premium = (bp / conv_value - 1.0) * 100.0
+
+    # 静态字段补救：仅当 EM 缓存中该债的票面/赎回价缺失时才走一次东财单只补取，
+    # 命中后写回缓存；常见情况（缓存已有）走纯 dict 查找，零网络。
+    pure_value = None
+    redeem_price = None
+    need_recover = False
+    try:
+        cached = fetch_em_cb_basics().get(code)
+    except Exception:
+        cached = None
+    if not cached or cached.get("coupon_rates") is None or cached.get("redeem_price") is None:
+        need_recover = True
+    if need_recover:
+        try:
+            fresh = fetch_em_one(code)
+            if fresh:
+                with _EM["lock"]:
+                    _EM["data"][code] = fresh
+                cached = fresh
+        except Exception:
+            pass
+    if cached:
+        cr = cached.get("coupon_rates")
+        rp = cached.get("redeem_price")
+        yl = cached.get("years_left")
+        if cr and rp is not None and yl and bp:
+            disc = RATING_YIELD.get((cached.get("rating") or "").upper()) or 0.04
+            pv = compute_pure_value(cr, rp, yl, disc)
+            if pv is not None:
+                pure_value = round(pv, 2)
+        if rp is not None:
+            redeem_price = round(rp, 2)
+
     return {
         "bond_price": round(bp, 3) if bp else None,
         "bond_pct": round(qb.get("pct"), 2) if qb.get("pct") is not None else None,
@@ -571,5 +606,7 @@ def get_realtime(code):
         "stock_pct": round(qs.get("pct"), 2) if qs.get("pct") is not None else None,
         "convert_value": round(conv_value, 2) if conv_value else None,
         "premium": round(premium, 2) if premium is not None else None,
+        "pure_value": pure_value,
+        "redeem_price": redeem_price,
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }

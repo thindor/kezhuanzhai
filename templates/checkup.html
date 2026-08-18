@@ -122,9 +122,9 @@
     <div class="card teal">
       <div class="ch">🛡️ 债性 · 防守（保底）</div>
       <div class="cb">
-        <div class="row"><span class="k">纯债价值(债底)</span><span class="v">{% if data.pure_value is not none %}{{ '%.2f'|format(data.pure_value) }}<small> 元</small>{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">纯债价值(债底)</span><span class="v" id="pureValue">{% if data.pure_value is not none %}{{ '%.2f'|format(data.pure_value) }}<small> 元</small>{% else %}—{% endif %}</span></div>
         <div class="row"><span class="k">到期收益率 YTM</span><span class="v">{% if data.ytm is not none %}{{ '%.2f'|format(data.ytm) }}%{% else %}—{% endif %}</span></div>
-        <div class="row"><span class="k">到期赎回价</span><span class="v">{% if data.redeem_price is not none %}{{ '%.2f'|format(data.redeem_price) }}<small> 元</small>{% else %}—{% endif %}</span></div>
+        <div class="row"><span class="k">到期赎回价</span><span class="v" id="redeemPrice">{% if data.redeem_price is not none %}{{ '%.2f'|format(data.redeem_price) }}<small> 元</small>{% else %}—{% endif %}</span></div>
         <div class="row"><span class="k">剩余年限</span><span class="v">{% if data.year_left is not none %}{{ '%.2f'|format(data.year_left) }}<small> 年</small>{% else %}—{% endif %}</span></div>
         <div class="row"><span class="k">余额</span><span class="v">{% if data.balance is not none %}{{ '%.2f'|format(data.balance) }}<small> 亿</small>{% else %}—{% endif %}</span></div>
         <div class="row"><span class="k">市净率 PB</span><span class="v">{% if data.pb is not none %}{{ '%.2f'|format(data.pb) }}{% else %}—{% endif %}</span></div>
@@ -211,7 +211,10 @@ function refreshRealtime(){
         setPct('stockPct', d.stock_pct);
         setNum('convValue', d.convert_value);
         setNum('premium', d.premium);
-        document.getElementById('rtUpdated').textContent = '实时更新：' + d.updated_at + ' · 来源：腾讯行情(实时)';
+        // 若服务端顺带回填了纯债/赎回价（首载冷启动被救回），一并刷新
+        if (d.pure_value != null) setNum('pureValue', d.pure_value);
+        if (d.redeem_price != null) setNum('redeemPrice', d.redeem_price);
+        document.getElementById('rtUpdated').textContent = '实时更新：' + d.updated_at + ' · 来源：腾讯行情(实时)' + (d.pure_value != null || d.redeem_price != null ? ' · 已顺带回填债底/赎回价' : '');
       } else { alert((d&&d.message)||'刷新失败'); }
     })
     .catch(function(e){ alert('请求出错：'+e.message); })
