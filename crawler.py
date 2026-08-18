@@ -788,19 +788,30 @@ def fetch_sina_kline(code, datalen=320):
 
 def fetch_daily_all(history=False):
     """采集所有在交易转债及其正股的每日收盘价，写入 daily_close。
-    history=True 补全历史(320交易日)，否则增量(最近10日)。
-    每只转债用同一连接、一个事务提交（而非逐行 commit），避免海量 fsync 与锁竞争。
-    返回 (成功数, 总债数)。"""
+    history=True 强制全部补全历史(320交易日)；
+    history=False (默认) 自动策略：本地存量<30交易日的债自动补全历史(320)，
+    其余增量(最近10日)。这样新债首次进系统时无需手动 --history 也能自愈，
+    且对存量债无额外开销。每只转债用同一连接、一个事务提交（而非逐行 commit），
+    避免海量 fsync 与锁竞争。返回 (成功数, 总债数)。"""
     bonds = get_active_trading_bonds()
-    datalen = 320 if history else 10
     total = len(bonds)
     ok = 0
     conn = get_conn()
     cur = conn.cursor()
+
+    # 预判各债是否需要补全历史（history=True 时全部强制 320，无需判断）
+    need_history = {}
+    if not history:
+        cur.execute("SELECT bond_code, COUNT(*) FROM daily_close GROUP BY bond_code")
+        for code, cnt in cur.fetchall():
+            if cnt < 30:
+                need_history[code] = True
+
     for i, b in enumerate(bonds):
         code = b["bond_code"]
         sc = b.get("stock_code")
         now = _now_str()
+        datalen = 320 if history else (320 if need_history.get(code) else 10)
         try:
             for d, c in fetch_sina_kline(code, datalen):
                 cur.execute("INSERT OR IGNORE INTO daily_close(bond_code, trade_date, updated_at) VALUES(?,?,?)",
