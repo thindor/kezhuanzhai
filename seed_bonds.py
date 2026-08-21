@@ -14,7 +14,7 @@ import requests
 import time
 from datetime import datetime
 
-from db import upsert_bond, compute_delist
+from db import upsert_bond, compute_delist, get_conn
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 BASE = ("https://datacenter-web.eastmoney.com/api/data/v1/get"
@@ -43,7 +43,32 @@ def fetch_page(page_number):
     return result.get("pages", 1), result.get("data") or []
 
 
+def backfill_current_price():
+    """每日维护：用 daily_close 最新收盘价回写 bonds.current_price（让现价每日准）。
+    仅更新有收盘价的债；无收盘价的债（新债/退市）保持原值。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE bonds SET current_price = (
+            SELECT bond_close FROM daily_close d
+            WHERE d.bond_code = bonds.bond_code
+            ORDER BY d.trade_date DESC LIMIT 1
+        )
+        WHERE EXISTS (SELECT 1 FROM daily_close d WHERE d.bond_code = bonds.bond_code)
+    """)
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
 def main():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT bond_code, current_price FROM bonds")
+    existing_price = {r[0]: r[1] for r in cur.fetchall()}
+    conn.close()
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     total = 0
     with_price = 0
@@ -72,7 +97,7 @@ def main():
                 "listing_date": _to_date(d.get("LISTING_DATE")),
                 "expire_date": _to_date(d.get("EXPIRE_DATE")),
                 "current_transfer_price": _to_float(d.get("TRANSFER_PRICE")),
-                "current_price": price,
+                "current_price": price if price is not None else existing_price.get(code),
                 "data_source": "eastmoney_RPT_BOND_CB_LIST",
                 "created_at": now,
                 "updated_at": now,
@@ -90,7 +115,8 @@ def main():
         if pn < pages:
             time.sleep(1.5)  # 慢慢爬，降低限流风险
 
-    print(f"DONE 入库 {total} 只，其中含现价 {with_price} 只，有上市日 {listed} 只")
+    backfilled = backfill_current_price()
+    print(f"DONE 入库 {total} 只，其中含现价 {with_price} 只，有上市日 {listed} 只，回写现价 {backfilled} 只")
 
 
 if __name__ == "__main__":
