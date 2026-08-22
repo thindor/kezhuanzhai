@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>可转债机构持有人榜单 - 可转债持有人信息</title>
+<title>可转债机构持有人榜单 - {{ site_name }}</title>
 <meta name="description" content="出现在可转债十大持有人中的机构（基金 / 一般机构）持有人完整榜单，按持仓估算市值排序。点击查看每家机构持有的全部可转债。">
 <meta name="keywords" content="可转债,机构持有人,基金持仓,机构榜,转债代码,持仓市值">
 <link rel="canonical" href="{{ request.url_root }}institutions">
@@ -13,7 +13,7 @@
 <body>
 <div class="container">
   <header class="topbar">
-    <a class="brand" href="/">可转债持有人信息</a>
+    <a class="brand" href="/">{% if site_logo %}<img class="brand-logo" src="{{ site_logo }}" alt="">{% endif %}{{ site_name }}</a>
     <nav>
       <a href="/">首页</a>
       <a href="/bonds">全部转债</a>
@@ -23,6 +23,7 @@
       <a href="/redemption-warnings">强赎预警</a>
       <a href="/down-revise-warnings">下修提醒</a>
       <a href="/double-low">双低策略</a>
+      <a href="/xiaopanzhai">小盘债</a>
       <a href="/admin">管理后台</a>
     </nav>
   </header>

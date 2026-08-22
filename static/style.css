@@ -10,6 +10,7 @@ body {
   padding: 14px 22px; background:#fff; border-bottom:1px solid #eceef2; }
 .brand { font-size: 17px; font-weight: 700; color:#1a2b50; letter-spacing:.5px; text-decoration:none; }
 .brand:hover { color:#2f6bff; }
+.brand-logo { height:28px; width:auto; vertical-align:middle; margin-right:8px; border-radius:6px; }
 .topbar nav { display:flex; gap:18px; align-items:center; }
 .topbar nav a { color:#2f6fed; text-decoration:none; font-size:14px; }
 .topbar nav a:hover { text-decoration:underline; }
@@ -66,6 +67,17 @@ tr:hover { background: #f7f9ff; }
 .panel-head { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px; gap:12px; flex-wrap:wrap; }
 .panel-head h2 { font-size:19px; margin:0; }
 .panel-head .hint { color:#9aa3b2; font-size:12.5px; }
+
+/* ---------------- 管理后台：站点设置 ---------------- */
+.site-settings { display:flex; flex-direction:column; gap:16px; max-width:640px; }
+.site-settings .field { display:flex; flex-direction:column; gap:6px; }
+.site-settings .field label { font-size:13.5px; color:#4a5568; font-weight:600; }
+.site-settings .field input { padding:9px 12px; border:1px solid #d0d4dc; border-radius:8px; font-size:14px; }
+.site-settings .logo-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.site-settings .logo-preview { height:34px; width:auto; max-width:200px; border:1px solid #eef0f4; border-radius:8px; padding:3px; background:#fff; }
+.site-settings .logo-url { margin-top:8px; }
+.site-settings .actions { display:flex; align-items:center; gap:12px; }
+.site-settings .actions button { padding:9px 18px; border:none; border-radius:8px; background:#2f6fed; color:#fff; cursor:pointer; font-size:14px; }
 
 /* ---- 报告期切换标签 ---- */
 .period-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 6px; }

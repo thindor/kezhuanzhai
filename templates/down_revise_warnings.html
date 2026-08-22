@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>下修提醒 - 可转债持有人信息</title>
+<title>下修提醒 - {{ site_name }}</title>
 <meta name="description" content="可转债下修提醒：基于每日收盘价，提前至少五个交易日提示即将触发向下修正转股价条款的可转债（正股持续低于转股价 85%），含转债、正股、转股价、下修触发价与达标进度。">
 <meta name="keywords" content="可转债下修提醒,转债下修,转股价修正,下修触发价,下修倒计时,下修博弈">
 <meta name="robots" content="index,follow">
@@ -13,7 +13,7 @@
 <body>
 <div class="container">
   <header class="topbar">
-    <a class="brand" href="/">可转债持有人信息</a>
+    <a class="brand" href="/">{% if site_logo %}<img class="brand-logo" src="{{ site_logo }}" alt="">{% endif %}{{ site_name }}</a>
     <nav>
       <a href="/">首页</a>
       <a href="/bonds">全部转债</a>
@@ -23,6 +23,7 @@
       <a href="/redemption-warnings">强赎预警</a>
       <a href="/down-revise-warnings">下修提醒</a>
       <a href="/double-low">双低策略</a>
+      <a href="/xiaopanzhai">小盘债</a>
       <a href="/admin">管理后台</a>
     </nav>
   </header>

@@ -34,15 +34,33 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 set_delisted, search_bonds,                 get_all_institutions,
                 get_institution_ranking, count_institutions,
                 upsert_announcement, get_announcements,
-                get_announcement_type_counts, clear_announcements, get_daily_close,
-                get_double_low_change)
+                get_announcement_type_counts, clear_announcements,                 get_daily_close,
+                get_double_low_change,
+                get_site_settings, save_site_settings)
 import crawler
 import checkup
+import mini_bond
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
 init_db()
+
+
+@app.context_processor
+def inject_site():
+    """将站点设置（名称 / logo / 域名）注入所有模板，后台改完即时生效。"""
+    s = get_site_settings()
+    return {
+        "site_name": s["site_name"],
+        "site_logo": s["site_logo"],
+        "site_domain": s["site_domain"],
+    }
+# 小盘债模块：幂等补齐 bonds 表所需列（赎回价 / 历史最高缓存）
+try:
+    mini_bond.ensure_columns()
+except Exception:
+    pass
 
 
 # ---- 搜索索引：支持代码 / 名称 / 简拼 ----
@@ -534,6 +552,30 @@ def double_low():
     return render_template("double_low.html", data=data)
 
 
+@app.route("/xiaopanzhai")
+def xiaopanzhai():
+    """小盘债（金陵式迷你弹性转债）筛选页：迷你盘 + 愿下修 + 非ST/未退市，含到期赎回价。"""
+    rows, updated = mini_bond.get_rows()
+    star = [r for r in rows if r["tag"] == "star"]
+    low = [r for r in rows if r["tag"] == "low"]
+    fired_n = sum(1 for r in rows if r["fired"])
+    return render_template("xiaopanzhai.html", rows=rows, updated=updated,
+                           total=len(rows), fired_n=fired_n,
+                           star_n=len(star), low_n=len(low))
+
+
+@app.route("/api/xiaopanzhai/refresh", methods=["POST"])
+def api_xiaopanzhai_refresh():
+    """实时刷新：重算实时价/赎回价/历史最高并写回 DB，返回 tbody 片段供前端无刷新替换。"""
+    try:
+        now = mini_bond.refresh_all()
+    except Exception as e:
+        return jsonify({"ok": False, "message": "刷新失败：" + str(e)}), 502
+    rows, _ = mini_bond.get_rows(fill_missing=False)
+    html = render_template("xiaopanzhai_rows.html", rows=rows)
+    return jsonify({"ok": True, "html": html, "updated_at": now})
+
+
 @app.route("/institutions")
 def institutions():
     """机构持有人完整榜单（服务端渲染，分页）。"""
@@ -705,7 +747,22 @@ def admin():
         return redirect(url_for("admin_login"))
     bonds = list_bonds()
     market = list_market_bonds()
-    return render_template("admin.html", bonds=bonds, market=market)
+    return render_template("admin.html", bonds=bonds, market=market, site=get_site_settings())
+
+
+@app.route("/admin/settings", methods=["GET", "POST"])
+def admin_settings():
+    if not is_admin():
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    if request.method == "POST":
+        name = (request.form.get("site_name") or "").strip() or "可转债持有人信息"
+        domain = (request.form.get("site_domain") or "").strip()
+        logo = (request.form.get("site_logo") or "").strip()  # base64 data URI 或 URL，空=清除
+        if logo.startswith("data:") and len(logo) > 2_000_000:
+            return jsonify({"ok": False, "message": "Logo 图片过大（请压缩到 2MB 以内）"}), 400
+        save_site_settings(name, domain, logo)
+        return jsonify({"ok": True})
+    return jsonify(get_site_settings())
 
 
 def _is_frozen(code):

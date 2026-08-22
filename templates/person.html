@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ name }} 持有的可转债 - 可转债持有人信息</title>
+<title>{{ name }} 持有的可转债 - {{ site_name }}</title>
 <meta name="description" content="{{ name }} 出现在可转债十大持有人中，共持有 {{ bond_count }} 只可转债。查看其全部持仓明细：转债代码、名称、报告期、持有量与比例。">
 <meta name="keywords" content="{{ name }},自然人持有人,持有的可转债,十大持有人">
 <link rel="stylesheet" href="/static/style.css?v=8">
@@ -30,13 +30,14 @@
 <body>
 <div class="container">
   <header class="topbar">
-    <a class="brand" href="/">可转债持有人信息</a>
+    <a class="brand" href="/">{% if site_logo %}<img class="brand-logo" src="{{ site_logo }}" alt="">{% endif %}{{ site_name }}</a>
     <nav>
       <a href="/">首页</a>
       <a href="{{ url_for('persons') }}">牛散榜</a>
       <a href="/redemption-warnings">强赎预警</a>
       <a href="/down-revise-warnings">下修提醒</a>
       <a href="/double-low">双低策略</a>
+      <a href="/xiaopanzhai">小盘债</a>
       <a href="/admin">管理后台</a>
     </nav>
   </header>

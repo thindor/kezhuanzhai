@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小盘债 · 金陵式迷你弹性转债筛选 - {{ site_name }}</title>
+<meta name="description" content="小盘债（金陵式迷你弹性转债）筛选：迷你盘 + 公司愿下修 + 非ST/未退市 + 历史游资活性 + 价格低位可守，含到期赎回价，支持实时刷新。">
+<meta name="keywords" content="小盘债,迷你转债,金陵转债,可转债筛选,下修,到期赎回价,游资,弹性债">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="{{ request.url_root }}xiaopanzhai">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .cards{display:flex;gap:14px;flex-wrap:wrap;margin:4px 0 6px}
+  .card{flex:1;min-width:140px;background:linear-gradient(135deg,#eef4ff,#f7faff);border:1px solid #e1e8f5;border-radius:12px;padding:14px 16px}
+  .card .n{font-size:26px;font-weight:700;color:#2b6cff}
+  .card .l{font-size:12px;color:#6b7686;margin-top:2px}
+  table.xp{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  table.xp th,table.xp td{padding:9px 10px;text-align:left;border-bottom:1px solid #eef1f6}
+  table.xp th{background:#f3f6fb;color:#5a6b80;font-weight:600;position:sticky;top:0}
+  table.xp td.num{font-weight:600}
+  table.xp tr.star{background:#fff8e6}
+  table.xp tr.low{background:#f0fbf3}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;background:#eef1f6;color:#5a6b80}
+  .badge.fired{background:#ffe9e9;color:#d8453b;font-weight:600}
+  .tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;background:#ffd970;color:#6b4e00;font-weight:600}
+  .tag.low{background:#bfe9c8;color:#1d6b39}
+  /* 排序表头 */
+  th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+  th.sortable:hover{color:#2b6cff}
+  th.sortable::after{content:"\2195";display:inline-block;margin-left:4px;font-size:11px;opacity:.35}
+  th.sortable.asc::after{content:"\25B2";opacity:1;color:#2b6cff}
+  th.sortable.desc::after{content:"\25BC";opacity:1;color:#2b6cff}
+  /* 刷新按钮 */
+  .refresh-btn{border:1px solid #2f6bff;background:#2f6bff;color:#fff;border-radius:18px;padding:6px 16px;font-size:13px;cursor:pointer;font-weight:600}
+  .refresh-btn:hover{background:#1f56e0}
+  .refresh-btn:disabled{opacity:.6;cursor:wait}
+  .updated{color:#9aa3b2;font-size:12px;margin-left:10px}
+  .note{background:#fafbff;border:1px solid #e6ebf2;border-radius:12px;padding:14px 18px;margin-top:16px;font-size:13px;line-height:1.85}
+  .note b{color:#2b6cff}
+  .note ul{margin:6px 0 0;padding-left:20px;line-height:1.9}
+</style>
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <a class="brand" href="/">{% if site_logo %}<img class="brand-logo" src="{{ site_logo }}" alt="">{% endif %}{{ site_name }}</a>
+    <nav>
+      <a href="/">首页</a>
+      <a href="/bonds">全部转债</a>
+      <a href="/persons">牛散榜</a>
+      <a href="/institutions">机构榜</a>
+      <a href="/announcements">可转债公告</a>
+      <a href="/redemption-warnings">强赎预警</a>
+      <a href="/down-revise-warnings">下修提醒</a>
+      <a href="/double-low">双低策略</a>
+      <a href="/xiaopanzhai" style="color:#1f56e0;font-weight:700">小盘债</a>
+      <a href="/admin">管理后台</a>
+    </nav>
+  </header>
+
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">
+      <svg class="home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      首页
+    </a>
+    <span class="current">小盘债</span>
+  </nav>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>🪙 小盘债（金陵式迷你弹性转债筛选）</h2>
+      <span>
+        <button class="refresh-btn" id="refreshBtn" onclick="refreshData()">🔄 实时刷新</button>
+        <span class="updated" id="updatedAt">{% if updated %}更新于 {{ updated }}{% else %}尚未刷新{% endif %}</span>
+      </span>
+    </div>
+    <p class="hint" style="margin:0 0 6px">
+      对标金陵转债画像：<strong>迷你盘 + 公司愿下修 + 非ST/未退市 + 历史游资活性 + 价格低位可守</strong>。
+      这类债「低风险（债底稳）+ 高弹性（小盘+愿下修+游资记忆）」，亏有限、赚可观，适合上一定仓位。
+    </p>
+    <div class="cards">
+      <div class="card"><div class="n">{{ total }}</div><div class="l">符合硬标准候选(只)</div></div>
+      <div class="card"><div class="n">{{ fired_n }}</div><div class="l">历史曾炒至170+ (只)</div></div>
+      <div class="card"><div class="n">{{ star_n }}</div><div class="l">★低位+有弹性记忆(只)</div></div>
+      <div class="card"><div class="n">{{ low_n }}</div><div class="l">低位潜伏(<120)(只)</div></div>
+    </div>
+    <div class="note">
+      <b>筛选逻辑</b>
+      <ul>
+        <li><b>迷你盘</b>：发行规模 ≤ 5 亿（库内无剩余规模字段，以发行规模代理；金陵发行 2.5 亿）</li>
+        <li><b>愿下修</b>：历史下修次数 ≥ 1（公司不排斥下修＝随时能「转守为攻」的扳机）</li>
+        <li><b>非ST / 未退市</b>：排除正股暴雷（间接保证「负债率不高、现金流尚可」的底线）</li>
+        <li><b>历史游资活性</b>：长周期(约2年)日K历史最高价 ≥ 170，验证「被资金点过火」的记忆</li>
+        <li><b>价格低位可守</b>（隐含）：现价 ≤ 120 才谈得上「低风险、随时转守为攻」，高位债债底保护弱</li>
+        <li><b>到期赎回价</b>：取自东财赎回条款解析（面值100 + 末年代偿），是到期保底价，判断安全垫用</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h3>候选清单（{{ total }} 只，★为重点潜伏标的）</h3>
+      <span class="hint">点击表头可排序（▲升序 / ▼降序）· 转债名可点进详情</span>
+    </div>
+    <table class="xp">
+      <thead><tr>
+        <th class="sortable" data-type="text">代码</th>
+        <th class="sortable" data-type="text">转债</th>
+        <th class="sortable" data-type="text">正股</th>
+        <th class="sortable" data-type="text">评级</th>
+        <th class="sortable" data-type="num">规模(亿)</th>
+        <th class="sortable" data-type="num">下修</th>
+        <th class="sortable" data-type="num">现价</th>
+        <th class="sortable" data-type="num">历史最高</th>
+        <th class="sortable" data-type="text">价格分档</th>
+        <th class="sortable" data-type="num">到期赎回价</th>
+        <th class="sortable" data-type="date">到期时间</th>
+        <th class="sortable" data-type="text">标记</th>
+      </tr></thead>
+      <tbody id="tbody">
+        {% include 'xiaopanzhai_rows.html' %}
+      </tbody>
+    </table>
+  </section>
+
+  <div class="note">
+    <b>数据缺口与口径说明（重要）</b><br>
+    1. <b>负债率 / 现金流</b>：库内无正股财报字段，本筛选以「非ST + 评级」作信用稳健代理。若要精确验证「现金流尚可、负债率不高」，需补正股资产负债率/经营现金流（东财F10或akshare）。<br>
+    2. <b>迷你口径</b>：用的是<b>发行规模</b>而非<b>剩余规模</b>。部分发行大盘债大量转股后剩余规模也很小，可能漏选；反之发行小盘但几乎未转股的更接近真实迷你。精确筛选建议补「剩余规模」字段（集思录/东财）。<br>
+    3. <b>历史活性</b>：已用新浪长周期日K(约2年)补全，覆盖 2024-08 至今。更早的炒作（如2023及以前）可能未计入；若某债历史最高仍低，不代表永远没活性，只是近2年未见爆炒。<br>
+    4. <b>到期赎回价</b>：取自东财赎回条款解析（面值 + 末年代偿，如 100+10=110、或条款直接写「面值的107%」=107）。属固定条款，刷新不会改变；现价低于赎回价即「到期不亏」。<br>
+    5. <b>★重点</b>＝现价≤120 且 历史最高≥150（低位潜伏、弹性有记忆，最贴近「随时转守为攻」的金陵式机会）；<b>低位</b>＝现价≤120 但弹性未充分验证。
+  </div>
+</div>
+
+<script>
+// ---- 表头排序 ----
+(function(){
+  var table=document.querySelector('table.xp');
+  if(!table)return;
+  var thead=table.querySelector('thead');
+  var tbody=table.querySelector('tbody');
+  var ths=thead.querySelectorAll('th.sortable');
+  var state={};
+  ths.forEach(function(th){
+    th.addEventListener('click',function(){
+      var type=th.getAttribute('data-type')||'text';
+      var col=th.cellIndex;
+      var dir=(state[col]==='asc')?-1:1;
+      state={};state[col]=(dir===1)?'asc':'desc';
+      ths.forEach(function(t){t.classList.remove('asc','desc');});
+      th.classList.add((dir===1)?'asc':'desc');
+      var rows=Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+      rows.sort(function(a,b){
+        var av=a.children[col].getAttribute('data-sort');
+        var bv=b.children[col].getAttribute('data-sort');
+        if(type==='num'){av=parseFloat(av);bv=parseFloat(bv);}
+        if(av<bv)return -1*dir;
+        if(av>bv)return 1*dir;
+        return 0;
+      });
+      rows.forEach(function(r){tbody.appendChild(r);});
+    });
+  });
+})();
+
+// ---- 实时刷新（无刷新替换 tbody） ----
+function refreshData(){
+  var btn=document.getElementById('refreshBtn');
+  btn.disabled=true; btn.textContent='刷新中…';
+  fetch('/api/xiaopanzhai/refresh',{method:'POST'})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(d.ok){
+        document.getElementById('tbody').innerHTML=d.html;
+        document.getElementById('updatedAt').textContent='更新于 '+d.updated_at;
+      }else{
+        alert(d.message||'刷新失败');
+      }
+    })
+    .catch(function(e){alert('刷新出错：'+e.message);})
+    .finally(function(){btn.disabled=false; btn.textContent='🔄 实时刷新';});
+}
+</script>
+</body>
+</html>

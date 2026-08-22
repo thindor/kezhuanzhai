@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>可转债持有人信息 · 十大持有人、基金持仓与牛散查询</title>
-<meta name="description" content="可转债持有人信息：输入代码 / 名称 / 简拼，查询可转债十大持有人、基金持仓与自然人（牛散）明细；自动聚合持有可转债的牛散并按持仓市值排序。数据源自公开定期报告。">
+<title>{{ site_name }} · 十大持有人、基金持仓与牛散查询</title>
+<meta name="description" content="{{ site_name }}：输入代码 / 名称 / 简拼，查询可转债十大持有人、基金持仓与自然人（牛散）明细；自动聚合持有可转债的牛散并按持仓市值排序。数据源自公开定期报告。">
 <meta name="keywords" content="可转债,十大持有人,基金持仓,自然人,牛散,债券查询,持仓市值,转债代码,转债名称">
-<meta name="author" content="可转债持有人信息系统">
+<meta name="author" content="{{ site_name }}">
 <link rel="canonical" href="{{ request.url_root }}">
 <meta property="og:type" content="website">
-<meta property="og:title" content="可转债持有人信息 · 十大持有人、牛散查询">
+<meta property="og:title" content="{{ site_name }} · 十大持有人、牛散查询">
 <meta property="og:description" content="输入代码/名称/简拼，查询可转债十大持有人、基金持仓与自然人（牛散）明细；自动聚合持有可转债的牛散并按持仓市值排序。">
 <meta property="og:url" content="{{ request.url_root }}">
 <meta name="twitter:card" content="summary">
@@ -17,7 +17,7 @@
 {
   "@context": "https://schema.org",
   "@type": "WebSite",
-  "name": "可转债持有人信息",
+  "name": "{{ site_name }}",
   "url": "{{ request.url_root }}",
   "potentialAction": {
     "@type": "SearchAction",
@@ -131,7 +131,7 @@
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="/">可转债持有人信息</a>
+  <a class="brand" href="/">{% if site_logo %}<img class="brand-logo" src="{{ site_logo }}" alt="">{% endif %}{{ site_name }}</a>
   <nav>
     <a href="/">首页</a>
     <a href="/bonds">全部转债</a>
@@ -141,12 +141,13 @@
       <a href="/redemption-warnings">强赎预警</a>
       <a href="/down-revise-warnings">下修提醒</a>
       <a href="/double-low">双低策略</a>
+      <a href="/xiaopanzhai">小盘债</a>
       <a href="/admin">管理后台</a>
   </nav>
 </header>
 
 <section class="hero">
-  <h1>可转债持有人信息</h1>
+  <h1>{{ site_name }}</h1>
   <p class="sub">输入代码 / 名称 / 简拼，查十大持有人、基金持仓与自然人持仓；下方自动聚合持有可转债的牛散，按持仓市值排序</p>
   <div class="search-box">
     <input id="codeInput" placeholder="输入代码 / 名称 / 简拼，如 127061、美锦、mjzz" value="{{ code }}">

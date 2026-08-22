@@ -128,6 +128,14 @@ def init_db():
         updated_at   TEXT
     )""")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_double_low_week ON double_low_log(week_start)")
+    # 站点设置（网站名称 / 域名 / logo）：单行存储，管理后台可改，即时生效无需重启
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS site_settings (
+        id          INTEGER PRIMARY KEY CHECK (id = 1),
+        site_name   TEXT,
+        site_domain TEXT,
+        site_logo   TEXT
+    )""")
     conn.commit()
     conn.close()
     # 启动即按到期日/摘牌日幂等回填退市标记（覆盖存量债券）
@@ -135,6 +143,50 @@ def init_db():
         backfill_delist_status()
     except Exception:
         pass
+
+
+# ---------------- 站点设置（名称 / 域名 / logo） ----------------
+def get_site_settings():
+    """返回站点设置 dict，缺失字段用默认值兜底。
+
+    logo 存 base64 data URI 或图片 URL 字符串；为空字符串表示未设置。
+    """
+    defaults = {
+        "site_name": "可转债持有人信息",
+        "site_domain": "",
+        "site_logo": "",
+    }
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT site_name, site_domain, site_logo FROM site_settings WHERE id=1")
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            return {
+                "site_name": row["site_name"] or defaults["site_name"],
+                "site_domain": row["site_domain"] or "",
+                "site_logo": row["site_logo"] or "",
+            }
+    except Exception:
+        pass
+    return defaults
+
+
+def save_site_settings(site_name, site_domain, site_logo):
+    """保存站点设置（upsert id=1）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT INTO site_settings (id, site_name, site_domain, site_logo)
+    VALUES (1, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+        site_name=excluded.site_name,
+        site_domain=excluded.site_domain,
+        site_logo=excluded.site_logo
+    """, (site_name, site_domain, site_logo))
+    conn.commit()
+    conn.close()
 
 
 def upsert_bond(b):

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>管理后台 - 可转债持有人信息</title>
+<title>管理后台 - {{ site_name }}</title>
 <link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
@@ -18,6 +18,38 @@
       <input type="checkbox" id="ignoreDelisted" checked>
       采集数据时忽略已退市可转债（勾选后，已退市的转债不会被采集 / 更新）
     </label>
+  </div>
+
+  <!-- 站点设置 -->
+  <div class="panel">
+    <div class="panel-head">
+      <h2>站点设置</h2>
+      <span class="hint">网站名称 / 域名 / Logo，保存后全站即时生效</span>
+    </div>
+    <div class="site-settings">
+      <div class="field">
+        <label>网站名称</label>
+        <input id="siteName" value="{{ site.site_name }}">
+      </div>
+      <div class="field">
+        <label>站点域名</label>
+        <input id="siteDomain" placeholder="如 kzz.bukui.fun" value="{{ site.site_domain }}">
+      </div>
+      <div class="field">
+        <label>Logo 图片</label>
+        <div class="logo-row">
+          <img id="logoPreview" class="logo-preview" {% if site.site_logo %}src="{{ site.site_logo }}"{% else %}style="display:none"{% endif %}>
+          <input type="file" id="logoFile" accept="image/*" onchange="onLogoFile(event)">
+          <button class="ghost" type="button" onclick="clearLogo()">清除 Logo</button>
+        </div>
+        <input id="logoUrl" class="logo-url" placeholder="或填写图片链接（留空则用上方上传）" value="{% if site.site_logo and not site.site_logo.startswith('data:') %}{{ site.site_logo }}{% endif %}">
+        <input type="hidden" id="siteLogo" value="{{ site.site_logo }}">
+      </div>
+      <div class="actions">
+        <button onclick="saveSiteSettings()">保存站点设置</button>
+        <span id="siteStatus" class="status"></span>
+      </div>
+    </div>
   </div>
 
   <!-- 区块1：已收录转债（已抓取持有人） -->
@@ -338,6 +370,51 @@ async function delOne(code){
 }
 function setStatus(s){ document.getElementById('adminStatus').textContent = s; }
 function setBatch(s){ document.getElementById('batchStatus').textContent = s; }
+
+/* ---------- 站点设置 ---------- */
+function onLogoFile(e){
+  const f = e.target.files && e.target.files[0];
+  if(!f) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      const maxH = 40, maxW = 200;
+      if(h > maxH){ w = Math.round(w * maxH / h); h = maxH; }
+      if(w > maxW){ h = Math.round(h * maxW / w); w = maxW; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      const data = canvas.toDataURL('image/png');
+      document.getElementById('siteLogo').value = data;
+      document.getElementById('logoUrl').value = '';
+      const pv = document.getElementById('logoPreview');
+      pv.src = data; pv.style.display = '';
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(f);
+}
+function clearLogo(){
+  document.getElementById('siteLogo').value = '';
+  document.getElementById('logoFile').value = '';
+  document.getElementById('logoUrl').value = '';
+  document.getElementById('logoPreview').style.display = 'none';
+}
+async function saveSiteSettings(){
+  let logo = (document.getElementById('siteLogo').value || '').trim();
+  const url = (document.getElementById('logoUrl').value || '').trim();
+  if(!logo && url) logo = url;
+  const name = (document.getElementById('siteName').value || '').trim();
+  const domain = (document.getElementById('siteDomain').value || '').trim();
+  const body = 'site_name=' + encodeURIComponent(name) + '&site_domain=' + encodeURIComponent(domain) + '&site_logo=' + encodeURIComponent(logo);
+  try{
+    const r = await fetch('/admin/settings', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body});
+    const d = await r.json();
+    document.getElementById('siteStatus').textContent = d.ok ? '保存成功，全站已更新' : ('失败：' + (d.message || ''));
+  }catch(e){ document.getElementById('siteStatus').textContent = '保存失败：' + e; }
+}
 
 renderMarket();
 renderCollected();
