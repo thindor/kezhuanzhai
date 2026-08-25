@@ -10,6 +10,7 @@
   <td class="num" data-sort="{{ '%.4f'|format(r.hist_max) if r.hist_max is not none else '0' }}">{% if r.hist_max is not none and r.hist_max >= 170 %}<span class="badge fired">曾炒至{{ '%.0f'|format(r.hist_max) }}</span>{% else %}<span class="badge">最高{{ '%.0f'|format(r.hist_max) if r.hist_max is not none else '—' }}</span>{% endif %}</td>
   <td data-sort="{{ r.band }}">{{ r.band }}</td>
   <td class="num" data-sort="{{ '%.4f'|format(r.redeem_price) if r.redeem_price is not none else '0' }}">{{ '%.2f'|format(r.redeem_price) if r.redeem_price is not none else '—' }}</td>
+  <td class="num" {% if r.diff is not none and r.diff >= 0 %}style="color:#1d9e57;font-weight:600"{% elif r.diff is not none %}style="color:#d8453b;font-weight:600"{% endif %} data-sort="{{ '%.4f'|format(r.diff) if r.diff is not none else '0' }}">{% if r.diff is not none %}{% if r.diff >= 0 %}+{% endif %}{{ '%.2f'|format(r.diff) }}{% else %}—{% endif %}</td>
   <td data-sort="{{ r.expire_date or '' }}">{{ r.expire_date or '—' }}</td>
   <td data-sort="{{ r.tag }}">{% if r.tag == 'star' %}<span class="tag">★重点</span>{% elif r.tag == 'low' %}<span class="tag low">低位</span>{% endif %}</td>
 </tr>

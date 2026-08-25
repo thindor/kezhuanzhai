@@ -29,22 +29,7 @@
 </head>
 <body>
 <div class="container">
-  <header class="topbar">
-    <a class="brand" href="/">{% if site_logo %}<img class="brand-logo" src="{{ site_logo }}" alt="">{% endif %}{{ site_name }}</a>
-    <nav>
-      <a href="/">首页</a>
-      <a href="/bonds">全部转债</a>
-      <a href="/persons">牛散榜</a>
-      <a href="/institutions">机构榜</a>
-      <a href="/announcements">可转债公告</a>
-      <a href="/redemption-warnings">强赎预警</a>
-      <a href="/down-revise-warnings">下修提醒</a>
-      <a href="/double-low">双低策略</a>
-      <a href="/xiaopanzhai">小盘债</a>
-      <a href="/admin">管理后台</a>
-    </nav>
-  </header>
-  <div class="freshness"><span class="dot"></span>数据截至 <b>{{ data_as_of }}</b> · 每日 16:30 收盘后自动更新（盘中实时价请点对应刷新按钮）</div>
+  {% include '_nav.html' %}
 
   <nav class="breadcrumb" aria-label="breadcrumb">
     <a href="/">

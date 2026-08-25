@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ site_name }} · 可转债投资工具 | 低风险投资数据查询</title>
-<meta name="description" content="{{ site_name }}：面向可转债投资者的低风险投资工具。输入代码/名称/简拼，查询可转债十大持有人、基金持仓与牛散明细，并提供双低策略、下修提醒、强赎预警等低风险策略数据。">
-<meta name="keywords" content="可转债投资,低风险投资,可转债工具,可转债数据,可转债十大持有人,可转债牛散,基金持仓,转债查询,持仓市值">
+<title>{{ site_name }} · 十大持有人、基金持仓与牛散查询</title>
+<meta name="description" content="{{ site_name }}：输入代码 / 名称 / 简拼，查询可转债十大持有人、基金持仓与自然人（牛散）明细；自动聚合持有可转债的牛散并按持仓市值排序。数据源自公开定期报告。">
+<meta name="keywords" content="可转债,十大持有人,基金持仓,自然人,牛散,债券查询,持仓市值,转债代码,转债名称">
 <meta name="author" content="{{ site_name }}">
 <link rel="canonical" href="{{ request.url_root }}">
 <meta property="og:type" content="website">
-<meta property="og:title" content="{{ site_name }} · 可转债投资工具 | 低风险投资数据查询">
-<meta property="og:description" content="面向可转债投资者的低风险投资工具：查询十大持有人、基金持仓与牛散，提供双低策略、下修提醒、强赎预警等数据。">
+<meta property="og:title" content="{{ site_name }} · 十大持有人、牛散查询">
+<meta property="og:description" content="输入代码/名称/简拼，查询可转债十大持有人、基金持仓与自然人（牛散）明细；自动聚合持有可转债的牛散并按持仓市值排序。">
 <meta property="og:url" content="{{ request.url_root }}">
 <meta name="twitter:card" content="summary">
 <script type="application/ld+json">
@@ -133,7 +133,7 @@
   .market-head { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:6px; }
   .market-head h2 { font-size:19px; margin:0; }
   .market-head .hint { color:#9aa3b2; font-size:12.5px; }
-  .market-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:14px; }
+  .market-grid { display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; }
   .market-card { background:#fff; border:1px solid #eef0f4; border-radius:14px; padding:16px 16px 14px; box-shadow:0 1px 3px rgba(0,0,0,.03); }
   .market-card .mc-label { color:#6b7280; font-size:13px; margin-bottom:6px; }
   .market-card .mc-value { font-size:25px; font-weight:800; color:#1a2b50; font-variant-numeric:tabular-nums; line-height:1.1; }
@@ -142,7 +142,7 @@
   .market-card.link { cursor:pointer; transition:.15s; }
   .market-card.link:hover { border-color:#2f6bff; box-shadow:0 4px 14px rgba(47,107,255,.15); transform:translateY(-2px); }
   .market-card.link .mc-value { color:#2f6bff; }
-  .market-charts { display:grid; grid-template-columns:1fr; gap:14px; margin-top:14px; }
+  .market-charts { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }
   .chart-box { background:#fff; border:1px solid #eef0f4; border-radius:14px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.03); }
   .chart-box h3 { font-size:14.5px; margin:0 0 10px; color:#1a2b50; }
   .chart-box .chart-canvas-wrap { position:relative; height:220px; }
@@ -153,7 +153,22 @@
 </style>
 </head>
 <body>
-{% include '_nav.html' %}
+<header class="topbar">
+  <a class="brand" href="/">{% if site_logo %}<img class="brand-logo" src="{{ site_logo }}" alt="">{% endif %}{{ site_name }}</a>
+  <nav>
+    <a href="/">首页</a>
+    <a href="/bonds">全部转债</a>
+    <a href="/persons">牛散榜</a>
+    <a href="/institutions">机构榜</a>
+      <a href="/announcements">可转债公告</a>
+      <a href="/redemption-warnings">强赎预警</a>
+      <a href="/down-revise-warnings">下修提醒</a>
+      <a href="/double-low">双低策略</a>
+      <a href="/new-bonds">新发转债</a>
+      <a href="/xiaopanzhai">小盘债</a>
+      <a href="/admin">管理后台</a>
+  </nav>
+</header>
 
 <section class="hero">
   <h1>{{ site_name }}</h1>
@@ -165,34 +180,6 @@
   <div class="status" id="status" style="text-align:center"></div>
 </section>
 
-<section class="recent-panel" id="recentPanel">
-  <div class="recent-head">
-    <h2>🔥 最近检索的可转债</h2>
-    <span class="hint">点击直接查看详情</span>
-  </div>
-  <div class="recent-chips">
-    {% for b in recent %}
-    <a class="recent-chip" href="/bond/{{ b.bond_code }}">
-      <span class="rc-name">{{ b.bond_name or b.bond_code }}</span>
-      <span class="rc-code">{{ b.bond_code }}</span>
-      {% if b.is_delisted %}<span class="delist-badge">已退市</span>{% endif %}
-    </a>
-    {% else %}
-    <span class="hint">暂无检索记录，搜索一只可转债试试～</span>
-    {% endfor %}
-  </div>
-  </section>
-
-<section class="entry-panel">
-  <a class="entry-card" href="/bonds">
-    <span class="ec-icon">📇</span>
-    <span class="ec-text">
-      <strong>查看全部已采集可转债</strong>
-      <small>按代码 / 名称、退市状态、历史下修次数筛选与检索</small>
-    </span>
-    <span class="ec-arrow">→</span>
-  </a>
-</section>
 <section class="market-panel">
   <div class="market-head">
     <h2>📊 市场概览</h2>
@@ -224,30 +211,47 @@
       <div class="mc-value">{{ '%.1f'|format(market.delist_ratio*100) if market.delist_ratio is not none else '—' }}<small>%</small></div>
       <div class="mc-sub">年内退市 {{ market.delist_count_year }} / 年初存量 {{ market.delist_base }}</div>
     </div>
-    <div class="market-card">
-      <div class="mc-label">可转债等权指数</div>
-      <div class="mc-value">{{ '%.2f'|format(ew.index_value) if ew and ew.index_value is not none else '—' }}</div>
-      <div class="mc-sub">
-        {% if ew and ew.chg is not none %}
-        <span style="color:{{ '#d4263a' if ew.chg>0 else ('#0a7d3e' if ew.chg<0 else '#9aa3b2') }};font-weight:600">{{ '▲' if ew.chg>0 else ('▼' if ew.chg<0 else '') }}{{ '%+.2f'|format(ew.chg) }} ({{ '%+.2f'|format(ew.chg_pct) }}%)</span>
-        <span style="color:#9aa3b2"> 较昨日</span>
-        {% else %}—{% endif %}
-      </div>
-    </div>
   </div>
   <div class="market-charts">
     <div class="chart-box">
-      <h3>可转债价格走势（中位数 vs 平均价 · 近一年）</h3>
-      <div class="chart-canvas-wrap"><canvas id="priceChart"></canvas></div>
+      <h3>可转债中位数走势（近一年）</h3>
+      <div class="chart-canvas-wrap"><canvas id="medianChart"></canvas></div>
     </div>
     <div class="chart-box">
-      <h3>可转债等权指数走势（近一年 · 数据起点基期=1000）</h3>
-      <div class="chart-canvas-wrap"><canvas id="ewChart"></canvas></div>
+      <h3>可转债平均价格走势（近一年）</h3>
+      <div class="chart-canvas-wrap"><canvas id="avgChart"></canvas></div>
     </div>
   </div>
 </section>
 
+<section class="recent-panel" id="recentPanel">
+  <div class="recent-head">
+    <h2>🔥 最近检索的可转债</h2>
+    <span class="hint">点击直接查看详情</span>
+  </div>
+  <div class="recent-chips">
+    {% for b in recent %}
+    <a class="recent-chip" href="/bond/{{ b.bond_code }}">
+      <span class="rc-name">{{ b.bond_name or b.bond_code }}</span>
+      <span class="rc-code">{{ b.bond_code }}</span>
+      {% if b.is_delisted %}<span class="delist-badge">已退市</span>{% endif %}
+    </a>
+    {% else %}
+    <span class="hint">暂无检索记录，搜索一只可转债试试～</span>
+    {% endfor %}
+  </div>
+  </section>
 
+<section class="entry-panel">
+  <a class="entry-card" href="/bonds">
+    <span class="ec-icon">📇</span>
+    <span class="ec-text">
+      <strong>查看全部已采集可转债</strong>
+      <small>按代码 / 名称、退市状态、历史下修次数筛选与检索</small>
+    </span>
+    <span class="ec-arrow">→</span>
+  </a>
+</section>
 
 <div id="result"></div>
 
@@ -346,46 +350,22 @@ window.addEventListener('DOMContentLoaded', ()=>{
   var dates = {{ trend.dates|tojson }};
   var median = {{ trend.median|tojson }};
   var avg = {{ trend.avg|tojson }};
-  var cv = document.getElementById('priceChart');
-  if(typeof Chart === 'undefined' || !cv || !dates || !dates.length) return;
-  new Chart(cv.getContext('2d'), {
-    type:'line',
-    data:{ labels: dates, datasets:[
-      { label:'中位数', data:median, borderColor:'rgba(47,107,255,1)',
-        backgroundColor:'rgba(47,107,255,0.08)', borderWidth:2,
-        pointRadius:0, tension:0.25, fill:true },
-      { label:'平均价', data:avg, borderColor:'rgba(10,125,62,1)',
-        backgroundColor:'rgba(10,125,62,0.08)', borderWidth:2,
-        pointRadius:0, tension:0.25, fill:true }
-    ] },
-    options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ display:true, position:'top',
-                 labels:{ color:'#6b7280', font:{size:12}, usePointStyle:true, boxWidth:8 } },
-        tooltip:{ mode:'index', intersect:false } },
-      scales:{ x:{ ticks:{ maxTicksLimit:8, color:'#9aa3b2', font:{size:11} }, grid:{ display:false } },
-               y:{ ticks:{ color:'#9aa3b2', font:{size:11} }, grid:{ color:'#f0f2f6' } } } }
-  });
-})();
-
-(function(){
-  var d = {{ ew_trend.dates|tojson }};
-  var idx = {{ ew_trend.index|tojson }};
-  var cv = document.getElementById('ewChart');
-  if(typeof Chart === 'undefined' || !cv || !d || !d.length) return;
-  new Chart(cv.getContext('2d'), {
-    type:'line',
-    data:{ labels:d, datasets:[
-      { label:'等权指数', data:idx, borderColor:'rgba(214,38,58,1)',
-        backgroundColor:'rgba(214,38,58,0.06)', borderWidth:2,
-        pointRadius:0, tension:0.25, fill:true }
-    ]},
-    options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ display:true, position:'top',
-                 labels:{ color:'#6b7280', font:{size:12}, usePointStyle:true, boxWidth:8 } },
-        tooltip:{ mode:'index', intersect:false } },
-      scales:{ x:{ ticks:{ maxTicksLimit:8, color:'#9aa3b2', font:{size:11} }, grid:{ display:false } },
-               y:{ ticks:{ color:'#9aa3b2', font:{size:11} }, grid:{ color:'#f0f2f6' } } } }
-  });
+  function draw(canvasId, data, color, label){
+    var cv = document.getElementById(canvasId);
+    if(typeof Chart === 'undefined' || !cv || !data || !data.length) return;
+    new Chart(cv.getContext('2d'), {
+      type:'line',
+      data:{ labels: dates, datasets:[{ label:label, data:data, borderColor:color,
+        backgroundColor: color.replace('1)', '0.08)'), borderWidth:2,
+        pointRadius:0, tension:0.25, fill:true }] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ display:false }, tooltip:{ mode:'index', intersect:false } },
+        scales:{ x:{ ticks:{ maxTicksLimit:8, color:'#9aa3b2', font:{size:11} }, grid:{ display:false } },
+                 y:{ ticks:{ color:'#9aa3b2', font:{size:11} }, grid:{ color:'#f0f2f6' } } } }
+    });
+  }
+  draw('medianChart', median, 'rgba(47,107,255,1)', '中位数');
+  draw('avgChart', avg, 'rgba(10,125,62,1)', '平均价');
 })();
 </script>
 </body>
