@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小盘债 · 金陵式迷你弹性转债筛选 - {{ site_name }}</title>
-<meta name="description" content="小盘债（金陵式迷你弹性转债）筛选：迷你盘 + 公司愿下修 + 非ST/未退市 + 历史游资活性 + 价格低位可守，含到期赎回价，支持实时刷新。">
-<meta name="keywords" content="小盘债,迷你转债,金陵转债,可转债筛选,下修,到期赎回价,游资,弹性债">
+<meta name="description" content="可转债投资工具：小盘债（金陵式迷你弹性转债）筛选，迷你盘+愿下修+非ST+价格低位可守，低风险投资中的弹性品种。">
+<meta name="keywords" content="可转债投资,低风险投资,小盘债,迷你转债,弹性债,可转债筛选,下修">
 <meta name="robots" content="index,follow">
 <link rel="canonical" href="{{ request.url_root }}xiaopanzhai">
 <link rel="stylesheet" href="/static/style.css">
@@ -114,6 +114,7 @@
         <th class="sortable" data-type="num">历史最高</th>
         <th class="sortable" data-type="text">价格分档</th>
         <th class="sortable" data-type="num">到期赎回价</th>
+        <th class="sortable" data-type="num">差值</th>
         <th class="sortable" data-type="date">到期时间</th>
         <th class="sortable" data-type="text">标记</th>
       </tr></thead>
@@ -129,7 +130,8 @@
     2. <b>迷你口径</b>：用的是<b>发行规模</b>而非<b>剩余规模</b>。部分发行大盘债大量转股后剩余规模也很小，可能漏选；反之发行小盘但几乎未转股的更接近真实迷你。精确筛选建议补「剩余规模」字段（集思录/东财）。<br>
     3. <b>历史活性</b>：已用新浪长周期日K(约2年)补全，覆盖 2024-08 至今。更早的炒作（如2023及以前）可能未计入；若某债历史最高仍低，不代表永远没活性，只是近2年未见爆炒。<br>
     4. <b>到期赎回价</b>：取自东财赎回条款解析（面值 + 末年代偿，如 100+10=110、或条款直接写「面值的107%」=107）。属固定条款，刷新不会改变；现价低于赎回价即「到期不亏」。<br>
-    5. <b>★重点</b>＝现价≤120 且 历史最高≥150（低位潜伏、弹性有记忆，最贴近「随时转守为攻」的金陵式机会）；<b>低位</b>＝现价≤120 但弹性未充分验证。
+    5. <b>★重点</b>＝现价≤120 且 历史最高≥150（低位潜伏、弹性有记忆，最贴近「随时转守为攻」的金陵式机会）；<b>低位</b>＝现价≤120 但弹性未充分验证。<br>
+    6. <b>差值</b>＝到期赎回价 − 现价（即「到期保本溢价」）。<b style="color:#1d9e57">绿色＝现值≥0</b>（现价≤赎回价，买入持有到期保本有余，下有安全垫）；<b style="color:#d8453b">红色＝负值</b>（现价已高于赎回价，溢价买入到期将小幅亏损）。点击「差值」表头可按安全垫大小排序。
   </div>
 </div>
 

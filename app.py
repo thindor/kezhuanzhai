@@ -287,8 +287,8 @@ def _is_bot():
 def index():
     code = request.args.get("code", "").strip()
     persons = get_all_natural_persons(limit=30, offset=0)
-    ranking = get_natural_ranking(limit=30)
-    inst_ranking = get_institution_ranking(limit=30)
+    ranking = get_natural_ranking(limit=10)
+    inst_ranking = get_institution_ranking(limit=10)
     recent = get_recent_bonds(12)
     market = compute_market_overview()
     trend = get_price_trend(days=365, min_sample=50)

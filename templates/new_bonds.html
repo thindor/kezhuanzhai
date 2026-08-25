@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>新发可转债 - {{ site_name }}</title>
+<meta name="description" content="可转债投资工具：最近 {{ window_days }} 天新上市可转债列表，含代码、名称、正股、评级、发行规模、现价与转股价，辅助可转债打新与低风险建仓。">
+<meta name="keywords" content="可转债投资,低风险投资,新发可转债,可转债打新,可转债申购,可转债上市">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="{{ request.url_root }}new-bonds">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .nb-head { max-width:1280px; margin:18px auto 6px; padding:0 16px; }
+  .nb-head h2 { font-size:21px; margin:0 0 6px; }
+  .nb-head p { color:#6b7280; font-size:14px; margin:0; }
+  .nb-head p strong { color:#1a2b50; }
+  .nb-wrap { max-width:1280px; margin:16px auto 60px; padding:0 16px; }
+  table.nb { width:100%; border-collapse:collapse; background:#fff; border:1px solid #eef0f4;
+    border-radius:12px; overflow:hidden; font-size:14px; }
+  table.nb th, table.nb td { padding:11px 13px; text-align:left; border-bottom:1px solid #f2f4f8;
+    font-variant-numeric:tabular-nums; }
+  table.nb th { background:#f7f9fc; color:#5b6472; font-weight:600; font-size:13px; }
+  table.nb tbody tr:hover { background:#fafbff; }
+  table.nb tr:last-child td { border-bottom:none; }
+  .nb-code { color:#9aa3b2; font-size:12.5px; }
+  .nb-name { color:#1a2b50; font-weight:600; text-decoration:none; }
+  .nb-name:hover { color:#2f6bff; text-decoration:underline; }
+  .nb-empty { color:#9aa3b2; padding:30px; text-align:center; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">{% if site_logo %}<img class="brand-logo" src="{{ site_logo }}" alt="">{% endif %}{{ site_name }}</a>
+  <nav>
+    <a href="/">首页</a>
+    <a href="/bonds">全部转债</a>
+    <a href="/persons">牛散榜</a>
+    <a href="/institutions">机构榜</a>
+    <a href="/announcements">可转债公告</a>
+    <a href="/redemption-warnings">强赎预警</a>
+    <a href="/down-revise-warnings">下修提醒</a>
+    <a href="/double-low">双低策略</a>
+    <a href="/new-bonds">新发转债</a>
+    <a href="/xiaopanzhai">小盘债</a>
+    <a href="/admin">管理后台</a>
+  </nav>
+</header>
+
+<nav class="breadcrumb" aria-label="breadcrumb">
+  <a href="/">
+    <svg class="home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+    首页
+  </a>
+  <span class="current">新发可转债</span>
+</nav>
+
+<div class="nb-head">
+  <h2>🆕 新发可转债（近 {{ window_days // 30 }} 个月）</h2>
+  <p>上市日期在最近 <strong>{{ window_days }}</strong> 天内（滚动）· 口径：未退市且剔除可交换债(EB) · 截至 <strong>{{ as_of }}</strong> · 共 <strong>{{ rows|length }}</strong> 只</p>
+</div>
+
+<div class="nb-wrap">
+  {% if rows %}
+  <table class="nb">
+    <thead>
+      <tr>
+        <th>代码</th>
+        <th>名称</th>
+        <th>正股</th>
+        <th>评级</th>
+        <th>发行规模(亿)</th>
+        <th>上市日期</th>
+        <th>现价(元)</th>
+        <th>转股价(元)</th>
+        <th>到期日</th>
+        <th>剩余年限</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><a class="nb-name" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a></td>
+        <td><a class="nb-name" href="/bond/{{ r.bond_code }}">{{ r.bond_name or r.bond_code }}</a></td>
+        <td>{{ r.stock_name or '—' }}{% if r.stock_code %}<div class="nb-code">{{ r.stock_code }}</div>{% endif %}</td>
+        <td>{{ r.rating or '—' }}</td>
+        <td>{% if r.issue_scale is not none %}{{ '%.2f'|format(r.issue_scale) }}{% else %}—{% endif %}</td>
+        <td>{{ r.listing_date or '—' }}</td>
+        <td>{% if r.current_price is not none %}{{ '%.2f'|format(r.current_price|float) }}{% else %}—{% endif %}</td>
+        <td>{% if r.current_transfer_price is not none %}{{ '%.2f'|format(r.current_transfer_price|float) }}{% else %}—{% endif %}</td>
+        <td>{{ r.expire_date or '—' }}</td>
+        <td>{% if r.remain_years is not none %}{{ r.remain_years }} 年{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="nb-empty">最近 {{ window_days }} 天内暂无新上市可转债。</div>
+  {% endif %}
+</div>
+</body>
+</html>
