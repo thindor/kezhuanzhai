@@ -1187,6 +1187,95 @@ def get_double_low_change():
             "current": latest_rows, "entered": entered, "exited": exited}
 
 
+def _load_all_double_low_snapshots():
+    """载入全部轮动周快照（升序），返回 (weeks升序, {week_start: [row,...]})。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    weeks = [r[0] for r in cur.execute(
+        "SELECT DISTINCT week_start FROM double_low_log ORDER BY week_start ASC").fetchall()]
+    week_rows = {}
+    for ws in weeks:
+        week_rows[ws] = [dict(r) for r in cur.execute(
+            "SELECT rank, bond_code, bond_name, stock_name, rating, "
+            "double_low, bond_price, premium_rate FROM double_low_log "
+            "WHERE week_start=? ORDER BY rank", (ws,)).fetchall()]
+    conn.close()
+    return weeks, week_rows
+
+
+def _bond_entry_exit_map(weeks, week_rows):
+    """每只债的调入周/价、末次持有周/价（从所有快照重建，无需额外表）。"""
+    first_seen, last_seen = {}, {}
+    for ws in weeks:  # 已升序
+        for r in week_rows[ws]:
+            code = r["bond_code"]
+            if code not in first_seen:
+                first_seen[code] = (ws, r["bond_price"])
+            last_seen[code] = (ws, r["bond_price"])
+    return first_seen, last_seen
+
+
+def get_double_low_history():
+    """返回所有轮动周（降序）明细，含每期调出债的持有收益。
+
+    收益完全基于每周轮动快照里存好的 bond_price（每次轮动必写，不依赖每日行情源）：
+    某债 '调入价' = 其首次进入组合那周快照的 bond_price；'调出价' = 其最后一次
+    持有周快照的 bond_price；持有收益 = (调出价-调入价)/调入价。
+    本期轮动收益 = 本期调出债持有收益的等权平均（None 时不计）。
+    """
+    weeks, week_rows = _load_all_double_low_snapshots()
+    if not weeks:
+        return []
+    first_seen, last_seen = _bond_entry_exit_map(weeks, week_rows)
+    weeks_desc = list(reversed(weeks))
+    out = []
+    for i, ws in enumerate(weeks_desc):
+        rows = week_rows[ws]
+        prev_ws = weeks_desc[i + 1] if i + 1 < len(weeks_desc) else None
+        prev_codes = {r["bond_code"] for r in week_rows[prev_ws]} if prev_ws else set()
+        cur_codes = {r["bond_code"] for r in rows}
+        entered = [r for r in rows if r["bond_code"] not in prev_codes]
+        exited = []
+        if prev_ws:
+            for r in week_rows[prev_ws]:
+                if r["bond_code"] not in cur_codes:
+                    code = r["bond_code"]
+                    entry_ws, entry_price = first_seen[code]
+                    exit_ws, exit_price = last_seen[code]
+                    ret = None
+                    if entry_price and exit_price and entry_price > 0:
+                        ret = (exit_price - entry_price) / entry_price * 100.0
+                    exited.append({**r, "entry_week": entry_ws, "entry_price": entry_price,
+                                   "exit_price": exit_price,
+                                   "return_pct": round(ret, 2) if ret is not None else None})
+        rets = [e["return_pct"] for e in exited if e["return_pct"] is not None]
+        week_return = round(sum(rets) / len(rets), 2) if rets else None
+        out.append({"week_start": ws, "rows": rows, "entered": entered,
+                    "exited": exited, "week_return": week_return,
+                    "n_entered": len(entered), "n_exited": len(exited)})
+    return out
+
+
+def get_double_low_holds():
+    """当前持仓（最新一周快照）含调入价与累计（未实现）收益。"""
+    weeks, week_rows = _load_all_double_low_snapshots()
+    if not weeks:
+        return []
+    first_seen, _ = _bond_entry_exit_map(weeks, week_rows)
+    latest_ws = weeks[-1]
+    rows = []
+    for r in week_rows[latest_ws]:
+        code = r["bond_code"]
+        ew, ep = first_seen.get(code, (latest_ws, r["bond_price"]))
+        cur_price = r["bond_price"]
+        ret = None
+        if ep and cur_price and ep > 0:
+            ret = (cur_price - ep) / ep * 100.0
+        rows.append({**r, "entry_week": ew, "entry_price": ep,
+                     "hold_return": round(ret, 2) if ret is not None else None})
+    return rows
+
+
 # ============ 市场概览（中位数 / 均价 / 存量 / 新发 / 退市比例） ============
 
 def _is_eb(code, name=None):

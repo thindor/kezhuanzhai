@@ -65,8 +65,9 @@ def backfill_current_price():
 def main():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT bond_code, current_price FROM bonds")
+    cur.execute("SELECT bond_code, current_price, current_transfer_price FROM bonds")
     existing_price = {r[0]: r[1] for r in cur.fetchall()}
+    existing_tp = {r[0]: r[2] for r in cur.fetchall()}
     conn.close()
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -96,7 +97,7 @@ def main():
                 "issue_scale": _to_float(d.get("ACTUAL_ISSUE_SCALE")),
                 "listing_date": _to_date(d.get("LISTING_DATE")),
                 "expire_date": _to_date(d.get("EXPIRE_DATE")),
-                "current_transfer_price": _to_float(d.get("TRANSFER_PRICE")),
+                "current_transfer_price": _to_float(d.get("TRANSFER_PRICE") or d.get("TRANSFER_VALUE") or d.get("INITIAL_TRANSFER_PRICE")) or existing_tp.get(code),
                 "current_price": price if price is not None else existing_price.get(code),
                 "data_source": "eastmoney_RPT_BOND_CB_LIST",
                 "created_at": now,
@@ -116,7 +117,8 @@ def main():
             time.sleep(1.5)  # 慢慢爬，降低限流风险
 
     backfilled = backfill_current_price()
-    print(f"DONE 入库 {total} 只，其中含现价 {with_price} 只，有上市日 {listed} 只，回写现价 {backfilled} 只")
+    tp_backfilled = backfill_transfer_prices()
+    print(f"DONE 入库 {total} 只，其中含现价 {with_price} 只，有上市日 {listed} 只，回写现价 {backfilled} 只，回写转股价 {tp_backfilled} 只")
 
 
 if __name__ == "__main__":

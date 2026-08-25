@@ -170,11 +170,22 @@ def fetch_all_bonds():
                 continue
             seen.add(code)
             new_in_page += 1
+            # 上市日期：东财 RPT_BOND_CB_LIST 字段名候选，规范化为 YYYY-MM-DD
+            ld = row.get("LISTING_DATE") or row.get("ONLIST_DATE") or row.get("LIST_DATE")
+            if ld:
+                ld = str(ld).strip()
+                if len(ld) >= 10 and ld[4] == '-' and ld[7] == '-':
+                    ld = ld[:10]
+                elif len(ld) >= 8 and ld[:8].isdigit():
+                    ld = "%s-%s-%s" % (ld[:4], ld[4:6], ld[6:8])
+                else:
+                    ld = None
             out.append({
                 "bond_code": code,
                 "bond_name": row.get("SECURITY_NAME_ABBR"),
                 "stock_code": row.get("CONVERT_STOCK_CODE"),
                 "stock_name": row.get("SECURITY_SHORT_NAME"),
+                "listing_date": ld,
             })
         # 整页无新增（分页死循环/重复数据）则停止
         if new_in_page == 0:
@@ -766,24 +777,68 @@ def _sina_symbol(code):
     return m + code
 
 
+def _secid(code):
+    """把债券/股票代码转成东方财富 kline 的 secid（市场.代码）。
+    债券：11/13 开头→沪(1.)，12 开头→深(0.)；股票：6/9 开头→沪，其余→深。"""
+    s = code[:2]
+    if s in ("11", "13"):
+        return "1." + code
+    if s == "12":
+        return "0." + code
+    if code[0] in ("6", "9"):
+        return "1." + code
+    return "0." + code
+
+
 def fetch_sina_kline(code, datalen=320):
-    """新浪财经日K线，返回 list[(trade_date, close)]，按日期升序。
-    直连可用（绕开东财/腾讯限制），转债与正股均支持。"""
-    sym = _sina_symbol(code)
-    url = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
-    params = {"symbol": sym, "scale": 240, "ma": "no", "datalen": datalen}
+    """日K线收盘价，返回 list[(trade_date, close)] 升序。
+
+    主源：东方财富 push2his kline（直连稳定、转债与正股均支持、数据新鲜，
+    到当日）；兜底：新浪 CN_MarketData（偶发限流时回退）。
+    注意：新浪行情源自 2026-08 起频繁限流返回空，故以东财为主。
+    """
+    secid = _secid(code)
+    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    params = {
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "klt": 101, "fqt": 1, "secid": secid,
+        "beg": 0, "end": "20500101", "lmt": datalen,
+        "ut": "fa5fd1943c7b386f172d6893dbfbaa15",
+    }
+    out = []
+    # 东财偶发限流返回空，重试 2 次(退避)以提升采集可靠性
+    for attempt in range(3):
+        try:
+            r = requests.get(url, params=params, timeout=15,
+                             headers={"User-Agent": "Mozilla/5.0"})
+            d = r.json()
+            kd = d.get("data") or {}
+            klines = kd.get("klines") or []
+            for kl in klines:
+                parts = kl.split(",")
+                if len(parts) >= 3:
+                    try:
+                        out.append((parts[0], float(parts[2])))
+                    except (ValueError, TypeError):
+                        continue
+            if out:
+                return out
+        except Exception:
+            pass
+        if attempt < 2:
+            time.sleep(1.2)
+    # 兜底：新浪
     try:
-        r = requests.get(url, params=params, timeout=15, proxies={"http": None, "https": None})
+        sym = _sina_symbol(code)
+        r = requests.get(
+            "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
+            params={"symbol": sym, "scale": 240, "ma": "no", "datalen": datalen},
+            timeout=15, proxies={"http": None, "https": None})
         arr = r.json()
+        return [(it["day"], float(it["close"])) for it in arr]
     except Exception:
         return []
-    out = []
-    for it in arr:
-        try:
-            out.append((it["day"], float(it["close"])))
-        except (KeyError, ValueError, TypeError):
-            continue
-    return out
 
 
 def fetch_daily_all(history=False):
@@ -834,7 +889,7 @@ def fetch_daily_all(history=False):
             print("[daily] 采集失败 %s: %s" % (code, e))
         if (i + 1) % 50 == 0:
             print("[daily] 进度 %d/%d" % (i + 1, total))
-        time.sleep(0.1)
+        time.sleep(0.4)
     conn.close()
     return ok, total
 

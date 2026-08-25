@@ -36,6 +36,8 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 upsert_announcement, get_announcements,
                 get_announcement_type_counts, clear_announcements,                 get_daily_close,
                 get_double_low_change,
+                get_double_low_history,
+                get_double_low_holds,
                 compute_market_overview, get_price_trend, get_new_bonds,
                 get_site_settings, save_site_settings)
 import crawler
@@ -547,7 +549,7 @@ def down_revise_warnings():
 
 @app.route("/double-low")
 def double_low():
-    """双低策略页面：当前前 20 只双低转债 + 本周轮动进入/调出的标的。"""
+    """双低策略页面：当前持仓 20 只 + 累计收益 + 历史轮动记录（每期进入/调出与轮动收益）。"""
     data = get_double_low_change()
     if data is None:
         # 首次访问自动生成一次轮动快照
@@ -556,7 +558,9 @@ def double_low():
             data = get_double_low_change()
         except Exception:
             data = None
-    return render_template("double_low.html", data=data)
+    holds = get_double_low_holds()
+    history = get_double_low_history()
+    return render_template("double_low.html", data=data, holds=holds, history=history)
 
 
 @app.route("/new-bonds")
