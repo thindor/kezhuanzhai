@@ -677,10 +677,20 @@ def bond_detail(code):
     except (TypeError, ValueError):
         eff_tp = None
 
+    # ---- 已公告强赎：取该债 announce_type='强赎' 的最新一条公告 ----
+    redeem_ann = None
+    try:
+        rans = get_bond_announcements(code, "强赎")
+        if rans:
+            redeem_ann = rans[0]
+    except Exception:
+        redeem_ann = None
+
     # ---- 每日收盘价历史（转债 + 正股）+ 强赎预警 ----
     daily = get_daily_close(code, 250)
     redemption_warn = crawler.compute_redemption_warning(code)
-    down_revise_warn = crawler.compute_down_revise_warning(code)
+    # 已公告强赎的转债不会再下修，跳过下修周期计算与提醒
+    down_revise_warn = None if redeem_ann else crawler.compute_down_revise_warning(code)
 
     # ---- 转股价值 = 100 / 转股价 × 正股价（正股价取最新一日收盘价） ----
     conv_value = None
@@ -694,15 +704,6 @@ def bond_detail(code):
 
     # ---- 到期赎回价（bonds 表 redemption_price 列） ----
     redemption_price = bond.get("redemption_price")
-
-    # ---- 已公告强赎：取该债 announce_type='强赎' 的最新一条公告 ----
-    redeem_ann = None
-    try:
-        rans = get_bond_announcements(code, "强赎")
-        if rans:
-            redeem_ann = rans[0]
-    except Exception:
-        redeem_ann = None
 
     return render_template("bond.html", bond=bond, code=code,
                            down_count=count, down_records=records,
