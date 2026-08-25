@@ -117,8 +117,7 @@ def main():
             time.sleep(1.5)  # 慢慢爬，降低限流风险
 
     backfilled = backfill_current_price()
-    tp_backfilled = backfill_transfer_prices()
-    print(f"DONE 入库 {total} 只，其中含现价 {with_price} 只，有上市日 {listed} 只，回写现价 {backfilled} 只，回写转股价 {tp_backfilled} 只")
+    print(f"DONE 入库 {total} 只，其中含现价 {with_price} 只，有上市日 {listed} 只，回写现价 {backfilled} 只")
 
 
 if __name__ == "__main__":
