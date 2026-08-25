@@ -127,6 +127,29 @@
   .bond-actions .act-btn .badge {
     background:#d4263a; color:#fff; border-radius:10px; padding:1px 8px; font-size:12px;
   }
+
+  /* 市场概览 */
+  .market-panel { max-width:1280px; margin:26px auto 6px; padding:0 16px; }
+  .market-head { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:6px; }
+  .market-head h2 { font-size:19px; margin:0; }
+  .market-head .hint { color:#9aa3b2; font-size:12.5px; }
+  .market-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:14px; }
+  .market-card { background:#fff; border:1px solid #eef0f4; border-radius:14px; padding:16px 16px 14px; box-shadow:0 1px 3px rgba(0,0,0,.03); }
+  .market-card .mc-label { color:#6b7280; font-size:13px; margin-bottom:6px; }
+  .market-card .mc-value { font-size:25px; font-weight:800; color:#1a2b50; font-variant-numeric:tabular-nums; line-height:1.1; }
+  .market-card .mc-value small { font-size:13px; font-weight:600; color:#9aa3b2; margin-left:2px; }
+  .market-card .mc-sub { color:#9aa3b2; font-size:12px; margin-top:6px; }
+  .market-card.link { cursor:pointer; transition:.15s; }
+  .market-card.link:hover { border-color:#2f6bff; box-shadow:0 4px 14px rgba(47,107,255,.15); transform:translateY(-2px); }
+  .market-card.link .mc-value { color:#2f6bff; }
+  .market-charts { display:grid; grid-template-columns:1fr; gap:14px; margin-top:14px; }
+  .chart-box { background:#fff; border:1px solid #eef0f4; border-radius:14px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.03); }
+  .chart-box h3 { font-size:14.5px; margin:0 0 10px; color:#1a2b50; }
+  .chart-box .chart-canvas-wrap { position:relative; height:220px; }
+  @media (max-width: 980px){
+    .market-grid { grid-template-columns:repeat(2,1fr); }
+    .market-charts { grid-template-columns:1fr; }
+  }
 </style>
 </head>
 <body>
@@ -141,6 +164,7 @@
       <a href="/redemption-warnings">强赎预警</a>
       <a href="/down-revise-warnings">下修提醒</a>
       <a href="/double-low">双低策略</a>
+      <a href="/new-bonds">新发转债</a>
       <a href="/xiaopanzhai">小盘债</a>
       <a href="/admin">管理后台</a>
   </nav>
@@ -184,6 +208,61 @@
     <span class="ec-arrow">→</span>
   </a>
 </section>
+<section class="market-panel">
+  <div class="market-head">
+    <h2>📊 市场概览</h2>
+    <span class="hint">口径：剔除可交换债(EB)，基于存量转债现价 · 截至 {{ market.as_of }}</span>
+  </div>
+  <div class="market-grid">
+    <div class="market-card">
+      <div class="mc-label">可转债中位数</div>
+      <div class="mc-value">{{ '%.2f'|format(market.median_price) if market.median_price is not none else '—' }}<small>元</small></div>
+      <div class="mc-sub">样本 {{ market.price_sample }} 只</div>
+    </div>
+    <div class="market-card">
+      <div class="mc-label">可转债平均价格</div>
+      <div class="mc-value">{{ '%.2f'|format(market.avg_price) if market.avg_price is not none else '—' }}<small>元</small></div>
+      <div class="mc-sub">算术平均</div>
+    </div>
+    <div class="market-card">
+      <div class="mc-label">存量转债总数</div>
+      <div class="mc-value">{{ market.active_count }}<small>只</small></div>
+      <div class="mc-sub">未退市 · 非EB</div>
+    </div>
+    <div class="market-card link" onclick="location.href='/new-bonds'">
+      <div class="mc-label">新发转债（近6月）</div>
+      <div class="mc-value">{{ market.new_count }}<small>只</small></div>
+      <div class="mc-sub">点击查看列表 →</div>
+    </div>
+    <div class="market-card">
+      <div class="mc-label">{{ market.year }}年退市比例</div>
+      <div class="mc-value">{{ '%.1f'|format(market.delist_ratio*100) if market.delist_ratio is not none else '—' }}<small>%</small></div>
+      <div class="mc-sub">年内退市 {{ market.delist_count_year }} / 年初存量 {{ market.delist_base }}</div>
+    </div>
+    <div class="market-card">
+      <div class="mc-label">可转债等权指数</div>
+      <div class="mc-value">{{ '%.2f'|format(ew.index_value) if ew and ew.index_value is not none else '—' }}</div>
+      <div class="mc-sub">
+        {% if ew and ew.chg is not none %}
+        <span style="color:{{ '#d4263a' if ew.chg>0 else ('#0a7d3e' if ew.chg<0 else '#9aa3b2') }};font-weight:600">{{ '▲' if ew.chg>0 else ('▼' if ew.chg<0 else '') }}{{ '%+.2f'|format(ew.chg) }} ({{ '%+.2f'|format(ew.chg_pct) }}%)</span>
+        <span style="color:#9aa3b2"> 较昨日</span>
+        {% else %}—{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="market-charts">
+    <div class="chart-box">
+      <h3>可转债价格走势（中位数 vs 平均价 · 近一年）</h3>
+      <div class="chart-canvas-wrap"><canvas id="priceChart"></canvas></div>
+    </div>
+    <div class="chart-box">
+      <h3>可转债等权指数走势（近一年 · 数据起点基期=1000）</h3>
+      <div class="chart-canvas-wrap"><canvas id="ewChart"></canvas></div>
+    </div>
+  </div>
+</section>
+
+
 
 <div id="result"></div>
 
@@ -275,6 +354,54 @@ window.addEventListener('DOMContentLoaded', ()=>{
     window.location.replace('/bond/' + encodeURIComponent(v));
   }
 });
+</script>
+<script src="/static/js/chart.umd.min.js"></script>
+<script>
+(function(){
+  var dates = {{ trend.dates|tojson }};
+  var median = {{ trend.median|tojson }};
+  var avg = {{ trend.avg|tojson }};
+  var cv = document.getElementById('priceChart');
+  if(typeof Chart === 'undefined' || !cv || !dates || !dates.length) return;
+  new Chart(cv.getContext('2d'), {
+    type:'line',
+    data:{ labels: dates, datasets:[
+      { label:'中位数', data:median, borderColor:'rgba(47,107,255,1)',
+        backgroundColor:'rgba(47,107,255,0.08)', borderWidth:2,
+        pointRadius:0, tension:0.25, fill:true },
+      { label:'平均价', data:avg, borderColor:'rgba(10,125,62,1)',
+        backgroundColor:'rgba(10,125,62,0.08)', borderWidth:2,
+        pointRadius:0, tension:0.25, fill:true }
+    ] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ display:true, position:'top',
+                 labels:{ color:'#6b7280', font:{size:12}, usePointStyle:true, boxWidth:8 } },
+        tooltip:{ mode:'index', intersect:false } },
+      scales:{ x:{ ticks:{ maxTicksLimit:8, color:'#9aa3b2', font:{size:11} }, grid:{ display:false } },
+               y:{ ticks:{ color:'#9aa3b2', font:{size:11} }, grid:{ color:'#f0f2f6' } } } }
+  });
+})();
+
+(function(){
+  var d = {{ ew_trend.dates|tojson }};
+  var idx = {{ ew_trend.index|tojson }};
+  var cv = document.getElementById('ewChart');
+  if(typeof Chart === 'undefined' || !cv || !d || !d.length) return;
+  new Chart(cv.getContext('2d'), {
+    type:'line',
+    data:{ labels:d, datasets:[
+      { label:'等权指数', data:idx, borderColor:'rgba(214,38,58,1)',
+        backgroundColor:'rgba(214,38,58,0.06)', borderWidth:2,
+        pointRadius:0, tension:0.25, fill:true }
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ display:true, position:'top',
+                 labels:{ color:'#6b7280', font:{size:12}, usePointStyle:true, boxWidth:8 } },
+        tooltip:{ mode:'index', intersect:false } },
+      scales:{ x:{ ticks:{ maxTicksLimit:8, color:'#9aa3b2', font:{size:11} }, grid:{ display:false } },
+               y:{ ticks:{ color:'#9aa3b2', font:{size:11} }, grid:{ color:'#f0f2f6' } } } }
+  });
+})();
 </script>
 </body>
 </html>

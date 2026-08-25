@@ -36,6 +36,7 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 upsert_announcement, get_announcements,
                 get_announcement_type_counts, clear_announcements,                 get_daily_close,
                 get_double_low_change,
+                compute_market_overview, get_price_trend, get_new_bonds,
                 get_site_settings, save_site_settings)
 import crawler
 import checkup
@@ -287,8 +288,14 @@ def index():
     ranking = get_natural_ranking(limit=30)
     inst_ranking = get_institution_ranking(limit=30)
     recent = get_recent_bonds(12)
+    market = compute_market_overview()
+    trend = get_price_trend(days=365, min_sample=50)
+    from db import get_equal_weight_latest, get_equal_weight_trend
+    ew = get_equal_weight_latest()
+    ew_trend = get_equal_weight_trend(days=365)
     return render_template("index.html", code=code, persons=persons,
-                           ranking=ranking, inst_ranking=inst_ranking, recent=recent)
+                           ranking=ranking, inst_ranking=inst_ranking, recent=recent,
+                           market=market, trend=trend, ew=ew, ew_trend=ew_trend)
 
 
 @app.route("/api/bond/<code>")
@@ -550,6 +557,15 @@ def double_low():
         except Exception:
             data = None
     return render_template("double_low.html", data=data)
+
+
+@app.route("/new-bonds")
+def new_bonds():
+    rows = get_new_bonds(days=180)
+    market = compute_market_overview()
+    return render_template("new_bonds.html", rows=rows, market=market,
+                           window_days=market.get("new_window_days", 180),
+                           as_of=market.get("as_of"))
 
 
 @app.route("/xiaopanzhai")

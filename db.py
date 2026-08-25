@@ -128,6 +128,16 @@ def init_db():
         updated_at   TEXT
     )""")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_double_low_week ON double_low_log(week_start)")
+    # 可转债等权指数（全样本价格等权，每日收盘后重算；基期取数据起点）
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS equal_weight_index (
+        trade_date   TEXT PRIMARY KEY,
+        avg_price    REAL,
+        median_price REAL,
+        index_value  REAL,
+        sample_n     INTEGER,
+        updated_at   TEXT
+    )""")
     # 站点设置（网站名称 / 域名 / logo）：单行存储，管理后台可改，即时生效无需重启
     cur.execute("""
     CREATE TABLE IF NOT EXISTS site_settings (
@@ -1175,3 +1185,303 @@ def get_double_low_change():
     exited = [r for r in prev_rows if r["bond_code"] not in latest_codes]
     return {"week_start": latest_ws, "prev_week_start": prev_ws,
             "current": latest_rows, "entered": entered, "exited": exited}
+
+
+# ============ 市场概览（中位数 / 均价 / 存量 / 新发 / 退市比例） ============
+
+def _is_eb(code, name=None):
+    """判断是否为可交换债 EB（统计时应剔除）。
+    EB 代码：沪市 132 开头、深市 120 开头；名称常含 'EB' 或 '可交换'。"""
+    if code:
+        if code.startswith("132") or code.startswith("120"):
+            return True
+    if name and ("EB" in name or "可交换" in name):
+        return True
+    return False
+
+
+def _eb_filter_sql(alias="b"):
+    """生成剔除 EB 的 SQL 条件片段（针对 bonds 表别名 alias）。"""
+    return ("(%s.bond_code NOT LIKE '132%%' AND %s.bond_code NOT LIKE '120%%' "
+            "AND (%s.bond_name IS NULL OR %s.bond_name NOT LIKE '%%可交换%%'))"
+            % (alias, alias, alias, alias))
+
+
+def compute_market_overview():
+    """返回首页「市场概览」核心指标。口径（与用户定义一致，剔除可交换债 EB）：
+      - 中位数 / 均价：基于【存量(is_delisted=0) + 非EB + current_price 非空】的转债现价
+      - 存量总数：is_delisted=0 且非EB
+      - 新发数：is_delisted=0 且非EB 且 listing_date 在最近 180 天内（滚动）
+      - 退市比例：以【当年 1 月 1 日存量】为基数，当年(截至今天)退市数 / 基数
+        基数 = 在当年1月1日仍为存量的债（未退市，或虽退市但退市日>=当年1月1日）
+    返回 dict。"""
+    import datetime as _dt, statistics as _st
+    today = _dt.date.today()
+    year = today.year
+    jan1 = "%d-01-01" % year
+    cutoff = (today - _dt.timedelta(days=180)).strftime("%Y-%m-%d")
+    today_s = today.strftime("%Y-%m-%d")
+    eb = _eb_filter_sql("b")
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # 价格列表（存量、非EB、有现价）
+    rows = cur.execute(
+        "SELECT b.current_price FROM bonds b WHERE COALESCE(b.is_delisted,0)=0 AND %s "
+        "AND b.current_price IS NOT NULL AND b.current_price > 0" % eb
+    ).fetchall()
+    prices = [r[0] for r in rows]
+    n = len(prices)
+    median_price = _st.median(prices) if n > 0 else None
+    avg_price = (sum(prices) / n) if n > 0 else None
+
+    # 存量总数（非EB）
+    active = cur.execute(
+        "SELECT COUNT(*) FROM bonds b WHERE COALESCE(b.is_delisted,0)=0 AND %s" % eb
+    ).fetchone()[0]
+
+    # 新发数（最近180天上市，滚动）
+    new_cnt = cur.execute(
+        "SELECT COUNT(*) FROM bonds b WHERE COALESCE(b.is_delisted,0)=0 AND %s "
+        "AND b.listing_date IS NOT NULL AND b.listing_date >= ? AND b.listing_date <= ?"
+        % eb, (cutoff, today_s)
+    ).fetchone()[0]
+
+    # 退市比例：基数=当年1月1日仍为存量的债；当年退市数=今年退市的
+    base = cur.execute(
+        "SELECT COUNT(*) FROM bonds b WHERE %s AND "
+        "(COALESCE(b.is_delisted,0)=0 OR (b.is_delisted=1 AND b.delist_date >= ?))"
+        % eb, (jan1,)
+    ).fetchone()[0]
+    delisted_this_year = cur.execute(
+        "SELECT COUNT(*) FROM bonds b WHERE %s AND b.is_delisted=1 "
+        "AND b.delist_date >= ? AND b.delist_date <= ?"
+        % eb, (jan1, today_s)
+    ).fetchone()[0]
+    delist_ratio = (delisted_this_year / base) if base else None
+
+    conn.close()
+    return {
+        "median_price": median_price,
+        "avg_price": avg_price,
+        "price_sample": n,
+        "active_count": active,
+        "new_count": new_cnt,
+        "new_window_days": 180,
+        "delist_ratio": delist_ratio,
+        "delist_base": base,
+        "delist_count_year": delisted_this_year,
+        "year": year,
+        "as_of": today_s,
+    }
+
+
+def get_price_trend(days=365, min_sample=50):
+    """返回可转债价格中位数 / 均价的历史走势（供首页走势图）。
+    数据源：daily_close 按交易日聚合（JOIN bonds 过滤未退市+非EB），
+    仅保留当日样本数 >= min_sample 的可信交易日；最后追加一个【实时点】
+    （用 compute_market_overview 的当前中位数/均价），使曲线延伸到今天且与卡片一致。
+    返回 {dates:[...], median:[...], avg:[...]}。"""
+    import datetime as _dt, statistics as _st
+    from collections import defaultdict
+    cutoff = (_dt.date.today() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+    eb = _eb_filter_sql("b")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT d.trade_date, d.bond_close FROM daily_close d "
+        "JOIN bonds b ON b.bond_code = d.bond_code "
+        "WHERE d.bond_close IS NOT NULL AND d.trade_date >= ? "
+        "AND COALESCE(b.is_delisted,0)=0 AND %s ORDER BY d.trade_date" % eb,
+        (cutoff,)
+    )
+    by_day = defaultdict(list)
+    for trade_date, price in cur.fetchall():
+        by_day[trade_date].append(price)
+    conn.close()
+
+    dates, median_series, avg_series = [], [], []
+    for trade_date in sorted(by_day.keys()):
+        plist = by_day[trade_date]
+        if len(plist) < min_sample:
+            continue
+        plist_sorted = sorted(plist)
+        dates.append(trade_date)
+        median_series.append(round(_st.median(plist_sorted), 2))
+        avg_series.append(round(sum(plist_sorted) / len(plist_sorted), 2))
+
+    # 实时收尾点
+    ov = compute_market_overview()
+    if ov["median_price"] is not None:
+        dates.append(ov["as_of"])
+        median_series.append(round(ov["median_price"], 2))
+        avg_series.append(round(ov["avg_price"], 2) if ov["avg_price"] is not None else None)
+    return {"dates": dates, "median": median_series, "avg": avg_series}
+
+
+# ============ 可转债等权指数（价格等权，全样本日频） ============
+
+def compute_equal_weight_index(min_sample=50, base_value=1000.0):
+    """计算可转债等权指数并写库 equal_weight_index（幂等，可每日重算全量）。
+
+    口径（与 get_price_trend 一致，对标集思录等权指数）：
+      - 数据源：daily_close JOIN bonds，过滤 bond_close 非空 + 未退市 + 非EB；
+      - 每个交易日算算术平均价 avg_price 与中位数 median_price，样本数 sample_n；
+      - 基期 BASE_AVG = 全历史中【最早一个 sample_n>=min_sample 的交易日】的 avg_price；
+      - 指数值 index_value = avg_price / BASE_AVG * base_value（首期 = 1000）。
+
+    说明：本地 daily_close 自 2026-08 起才有数据，无法回溯到集思录的 2017-12-29 基期，
+    因此采用「数据起点基期 = 1000」的自洽口径——走势形状与集思录一致，
+    但绝对点位因基期不同而不可直接比较。返回最新一行 dict 或 None。
+    """
+    import statistics as _st
+    from collections import defaultdict
+    eb = _eb_filter_sql("b")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT d.trade_date, d.bond_close FROM daily_close d "
+        "JOIN bonds b ON b.bond_code = d.bond_code "
+        "WHERE d.bond_close IS NOT NULL "
+        "AND COALESCE(b.is_delisted,0)=0 AND %s ORDER BY d.trade_date" % eb
+    )
+    by_day = defaultdict(list)
+    for td, p in cur.fetchall():
+        by_day[td].append(p)
+    # 先汇总各达标交易日的均价/中位数，确定基期
+    day_stat = {}
+    for td, plist in by_day.items():
+        if len(plist) < min_sample:
+            continue
+        day_stat[td] = (sum(plist) / len(plist), _st.median(plist), len(plist))
+    if not day_stat:
+        conn.close()
+        return None
+    base_date = min(day_stat.keys())
+    base_avg = day_stat[base_date][0]
+    now = _now_str()
+    for td in sorted(day_stat.keys()):
+        avg_p, med_p, n = day_stat[td]
+        idx_val = round(avg_p / base_avg * base_value, 2) if base_avg else None
+        cur.execute(
+            "INSERT OR REPLACE INTO equal_weight_index"
+            "(trade_date, avg_price, median_price, index_value, sample_n, updated_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (td, round(avg_p, 2), round(med_p, 2), idx_val, n, now)
+        )
+    conn.commit()
+    conn.close()
+    return get_equal_weight_latest()
+
+
+def get_equal_weight_latest():
+    """返回最新交易日等权指数行 + 较前一交易日的涨跌/涨跌幅。
+    返回 dict(trade_date, avg_price, median_price, index_value, sample_n, chg, chg_pct) 或 None。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT trade_date, avg_price, median_price, index_value, sample_n "
+        "FROM equal_weight_index ORDER BY trade_date DESC LIMIT 1"
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    prev = cur.execute(
+        "SELECT index_value FROM equal_weight_index "
+        "WHERE trade_date < ? ORDER BY trade_date DESC LIMIT 1", (row["trade_date"],)
+    ).fetchone()
+    conn.close()
+    latest = dict(row)
+    prev_val = prev[0] if prev else None
+    if prev_val not in (None, 0):
+        latest["chg"] = round(latest["index_value"] - prev_val, 2)
+        latest["chg_pct"] = round((latest["index_value"] / prev_val - 1) * 100, 2)
+    else:
+        latest["chg"] = None
+        latest["chg_pct"] = None
+    return latest
+
+
+def get_equal_weight_trend(days=365):
+    """返回等权指数近 days 天的走势序列，供首页走势图。
+    返回 {dates:[...], index:[...], avg:[...]}。"""
+    import datetime as _dt
+    cutoff = (_dt.date.today() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+    conn = get_conn()
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT trade_date, index_value, avg_price FROM equal_weight_index "
+        "WHERE trade_date >= ? ORDER BY trade_date", (cutoff,)
+    ).fetchall()
+    conn.close()
+    return {
+        "dates": [r["trade_date"] for r in rows],
+        "index": [r["index_value"] for r in rows],
+        "avg": [r["avg_price"] for r in rows],
+    }
+
+
+def sync_bonds_list(bond_list):
+    """将 fetch_all_bonds() 返回的全量列表与 bonds 表同步：找出库中没有的转债，
+    upsert 基本信息（含 listing_date），返回新录入的转债数。
+    用于每日任务自动发现并录入新上市转债，支撑「新发转债数」滚动统计。
+    对新发现的转债 best-effort 用腾讯行情补一个现价（失败留空，由后续采集补齐）。"""
+    if not bond_list:
+        return 0
+    import crawler as _crawler
+    conn = get_conn()
+    cur = conn.cursor()
+    existing = set(r[0] for r in cur.execute("SELECT bond_code FROM bonds").fetchall())
+    new_cnt = 0
+    for b in bond_list:
+        code = b.get("bond_code")
+        if not code or code in existing:
+            continue
+        price = None
+        try:
+            price = _crawler._fetch_price(code)
+        except Exception:
+            price = None
+        upsert_bond({
+            "bond_code": code,
+            "bond_name": b.get("bond_name"),
+            "stock_code": b.get("stock_code"),
+            "stock_name": b.get("stock_name"),
+            "listing_date": b.get("listing_date"),
+            "is_delisted": 0,
+            "current_price": price,
+            "data_source": "东方财富数据中心",
+        })
+        existing.add(code)
+        new_cnt += 1
+    conn.close()
+    return new_cnt
+
+
+def get_new_bonds(days=180):
+    """返回最近 `days` 天内上市(listing_date)的可转债列表（存量、非EB），供 /new-bonds 页面。
+    含基本信息：代码、名称、正股、评级、发行规模、上市日期、现价、转股价、到期日、剩余年限。"""
+    import datetime as _dt
+    cutoff = (_dt.date.today() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+    today = _dt.date.today().strftime("%Y-%m-%d")
+    eb = _eb_filter_sql("b")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT b.bond_code, b.bond_name, b.stock_code, b.stock_name, b.rating, "
+        "b.issue_scale, b.listing_date, b.current_price, b.current_transfer_price, "
+        "b.expire_date FROM bonds b "
+        "WHERE COALESCE(b.is_delisted,0)=0 AND %s "
+        "AND b.listing_date IS NOT NULL AND b.listing_date >= ? AND b.listing_date <= ? "
+        "ORDER BY b.listing_date DESC" % eb, (cutoff, today)
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    for r in rows:
+        exp = r.get("expire_date")
+        try:
+            r["remain_years"] = round(
+                (_dt.date.fromisoformat(exp) - _dt.date.today()).days / 365.0, 2) if exp else None
+        except Exception:
+            r["remain_years"] = None
+    return rows
