@@ -869,12 +869,18 @@ def fetch_daily_all(history=False):
         datalen = 320 if history else (320 if need_history.get(code) else 10)
         try:
             for d, c in fetch_sina_kline(code, datalen):
+                # 跳过无收盘价的棒（如收盘前采集的当日 incomplete bar 返回空收盘价），
+                # 否则会写入 NULL 毒化 backfill_current_price（详见 110097 等债）。
+                if c is None or c <= 0:
+                    continue
                 cur.execute("INSERT OR IGNORE INTO daily_close(bond_code, trade_date, updated_at) VALUES(?,?,?)",
                             (code, d, now))
                 cur.execute("UPDATE daily_close SET bond_close=?, updated_at=? WHERE bond_code=? AND trade_date=?",
                             (c, now, code, d))
             if sc:
                 for d, c in fetch_sina_kline(sc, datalen):
+                    if c is None or c <= 0:
+                        continue
                     cur.execute("INSERT OR IGNORE INTO daily_close(bond_code, trade_date, updated_at) VALUES(?,?,?)",
                                 (code, d, now))
                     cur.execute("UPDATE daily_close SET stock_close=?, updated_at=? WHERE bond_code=? AND trade_date=?",

@@ -44,17 +44,24 @@ def fetch_page(page_number):
 
 
 def backfill_current_price():
-    """每日维护：用 daily_close 最新收盘价回写 bonds.current_price（让现价每日准）。
-    仅更新有收盘价的债；无收盘价的债（新债/退市）保持原值。"""
+    """每日维护：用 daily_close 最新【有效】收盘价回写 bonds.current_price（让现价每日准）。
+
+    关键修复：只取 bond_close 非空的【最近】交易日收盘价（ORDER BY trade_date DESC
+    且 bond_close IS NOT NULL）。此前直接取 trade_date 最新一行，会在「收盘前采集」
+    时把当日尚未收盘的 NULL 收盘价回写，导致现价被清空（详见 110097 等债）。
+    仅更新有有效收盘价的债；无收盘价的债（新债/退市/退债）保持原值。"""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         UPDATE bonds SET current_price = (
             SELECT bond_close FROM daily_close d
-            WHERE d.bond_code = bonds.bond_code
+            WHERE d.bond_code = bonds.bond_code AND d.bond_close IS NOT NULL
             ORDER BY d.trade_date DESC LIMIT 1
         )
-        WHERE EXISTS (SELECT 1 FROM daily_close d WHERE d.bond_code = bonds.bond_code)
+        WHERE EXISTS (
+            SELECT 1 FROM daily_close d
+            WHERE d.bond_code = bonds.bond_code AND d.bond_close IS NOT NULL
+        )
     """)
     n = cur.rowcount
     conn.commit()
