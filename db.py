@@ -1252,6 +1252,21 @@ def _close_on_or_before(closes, code, date):
     return res
 
 
+def get_latest_data_date():
+    """返回 daily_close 中最新的交易日（即全站行情/数据更新截至日期）。
+
+    由每日采集总入口 collect_daily.py 写入；为 None 时表示尚未采集过行情。
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        row = cur.execute("SELECT MAX(trade_date) FROM daily_close").fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
 def get_double_low_history():
     """返回所有轮动周（降序）明细，含每期调出债的持有收益。
 

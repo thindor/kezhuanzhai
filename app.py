@@ -39,7 +39,8 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 get_double_low_history,
                 get_double_low_holds,
                 compute_market_overview, get_price_trend, get_new_bonds,
-                get_site_settings, save_site_settings)
+                get_site_settings, save_site_settings,
+                get_latest_data_date)
 import crawler
 import checkup
 import mini_bond
@@ -280,6 +281,12 @@ def _is_bot():
     ua = (request.user_agent.string or "").lower()
     return any(k in ua for k in
                ("bot", "spider", "crawl", "slurp", "mediapartners", "archive", "http"))
+
+
+@app.context_processor
+def inject_freshness():
+    """全局注入『数据截至』日期，供所有模板顶部新鲜度条使用。"""
+    return {"data_as_of": get_latest_data_date()}
 
 
 # ---------------- 公开查询 ----------------
