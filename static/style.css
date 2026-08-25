@@ -41,10 +41,13 @@ body {
 
 /* 全站数据新鲜度条：展示『数据截至』日期，让用户一眼判断数字新鲜度 */
 .freshness { background:#f0f6ff; border-bottom:1px solid #dbe7ff; color:#36507e;
-  font-size:12.5px; padding:6px 22px; display:flex; align-items:center; gap:6px; }
+  font-size:12.5px; padding:6px 22px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .freshness b { color:#1a2b50; }
 .freshness .dot { width:7px; height:7px; border-radius:50%; background:#2faf5b; display:inline-block; }
 .freshness .muted { color:#7a8aa6; }
+@media (max-width: 860px){
+  .freshness { padding: 7px 14px; font-size: 12px; line-height: 1.55; row-gap: 2px; }
+}
 
 .search-bar { display: flex; gap: 8px; align-items: center; margin: 18px 0 10px; flex-wrap: wrap; }
 .search-bar input { padding: 9px 12px; border: 1px solid #d0d4dc; border-radius: 8px; font-size: 15px; width: 240px; }

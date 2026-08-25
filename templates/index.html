@@ -28,8 +28,8 @@
 </script>
 <link rel="stylesheet" href="/static/style.css">
 <style>
-  /* 搜索主视觉 */
-  .hero { text-align:center; padding:42px 16px 26px; }
+  /* 搜索主视觉：max-width 1280px 与内页 .container 对齐，整站横向边距一致 */
+  .hero { text-align:center; padding:42px 16px 26px; max-width:1280px; margin-left:auto; margin-right:auto; box-sizing:border-box; }
   .hero h1 { font-size:30px; margin:0 0 8px; letter-spacing:1px; }
   .hero p.sub { color:#6b7280; font-size:15px; margin:0 0 22px; }
   .search-box {
@@ -150,6 +150,36 @@
     .market-grid { grid-template-columns:repeat(2,1fr); }
     .market-charts { grid-template-columns:1fr; }
   }
+
+  /* 榜单大表窄屏横向滚动包裹（不破版，保留全部数据） */
+  .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .table-scroll > table.rank { min-width: 640px; }
+
+  /* 手机端首页整体适配：与导航 @media(860px) 对齐 */
+  @media (max-width: 860px){
+    .hero { padding: 22px 14px 16px; }
+    .hero h1 { font-size: 22px; letter-spacing: 0.5px; }
+    .hero p.sub { font-size: 13.5px; margin-bottom: 16px; line-height: 1.6; }
+    .search-box { flex-direction: column; gap: 10px; }
+    .search-box input, .search-box button { width: 100%; border-radius: 12px; }
+    .search-box input { height: 44px; padding: 0 16px; font-size: 15px; }
+    .search-box button { height: 44px; padding: 0 20px; font-size: 15px; }
+    .market-panel, .rank-panel, .recent-panel { padding: 0 12px; }
+    .market-grid { grid-template-columns: 1fr; gap: 10px; }
+    .market-card { padding: 13px 14px 12px; }
+    .market-card .mc-value { font-size: 22px; }
+    .market-charts { gap: 10px; }
+    .chart-box { padding: 12px 12px 10px; }
+    .chart-box h3 { font-size: 13.5px; }
+    .chart-box .chart-canvas-wrap { height: 200px; }
+    .rank-head { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .rank-head h2 { font-size: 17px; }
+    .rank-head .hint { font-size: 12px; }
+    table.rank th, table.rank td { padding: 10px 12px; font-size: 13.5px; }
+    .top-bonds { font-size: 12px; line-height: 1.5; }
+    .recent-chip { padding: 7px 13px; }
+    .recent-chip .rc-name { font-size: 13.5px; }
+  }
 </style>
 </head>
 <body>
@@ -257,7 +287,7 @@
     <span class="hint">同一只转债跨多期不重复累加，仅按最新报告期持仓 × 现价估算（现价缺失按面值 100 计）· Top {{ ranking|length }}</span>
   </div>
   {% if ranking %}
-  <table class="rank">
+  <div class="table-scroll"><table class="rank">
     <thead>
       <tr><th style="width:46px">#</th><th>牛散</th><th>持仓市值(估算)</th><th>持有转债</th><th>出现次数</th><th>代表持仓</th></tr>
     </thead>
@@ -273,7 +303,7 @@
       </tr>
     {% endfor %}
     </tbody>
-  </table>
+  </table></div>
   {% else %}
   <p class="hint">暂无自然人数据，请先在管理后台添加转债。</p>
   {% endif %}
@@ -286,7 +316,7 @@
     <span class="hint">机构(基金 / 一般机构)按持仓市值估算降序 · Top {{ inst_ranking|length }}</span>
   </div>
   {% if inst_ranking %}
-  <table class="rank">
+  <div class="table-scroll"><table class="rank">
     <thead>
       <tr><th style="width:46px">#</th><th>机构持有人</th><th>持仓市值(估算)</th><th>持有转债</th><th>出现次数</th><th>代表持仓</th></tr>
     </thead>
@@ -302,7 +332,7 @@
       </tr>
     {% endfor %}
     </tbody>
-  </table>
+  </table></div>
   {% else %}
   <p class="hint">暂无机构持有人数据，请先在管理后台添加转债。</p>
   {% endif %}
