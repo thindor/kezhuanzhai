@@ -1003,6 +1003,24 @@ def get_announcements(atype=None, limit=2000):
     return rows
 
 
+def get_bond_announcements(bond_code, atype=None):
+    """返回单只转债的全部公告（按 announce_date 倒序）；可按 announce_type 过滤。
+
+    用于详情页判断该债是否「已公告强赎」等，并展示公告原文链接。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    if atype:
+        cur.execute("SELECT * FROM announcements WHERE bond_code=? AND announce_type=? "
+                    "ORDER BY announce_date DESC", (bond_code, atype))
+    else:
+        cur.execute("SELECT * FROM announcements WHERE bond_code=? "
+                    "ORDER BY announce_date DESC", (bond_code,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
 def get_announcement_type_counts():
     """返回各公告类型的数量，供列表页 tabs 展示。"""
     conn = get_conn()

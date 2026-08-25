@@ -34,6 +34,7 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 set_delisted, search_bonds,                 get_all_institutions,
                 get_institution_ranking, count_institutions,
                 upsert_announcement, get_announcements,
+                get_bond_announcements,
                 get_announcement_type_counts, clear_announcements,                 get_daily_close,
                 get_double_low_change,
                 get_double_low_history,
@@ -681,6 +682,28 @@ def bond_detail(code):
     redemption_warn = crawler.compute_redemption_warning(code)
     down_revise_warn = crawler.compute_down_revise_warning(code)
 
+    # ---- 转股价值 = 100 / 转股价 × 正股价（正股价取最新一日收盘价） ----
+    conv_value = None
+    if eff_tp is not None and daily:
+        last_stock = daily[-1].get("stock_close")
+        if last_stock:
+            try:
+                conv_value = round(100.0 / float(eff_tp) * float(last_stock), 2)
+            except (TypeError, ValueError):
+                conv_value = None
+
+    # ---- 到期赎回价（bonds 表 redemption_price 列） ----
+    redemption_price = bond.get("redemption_price")
+
+    # ---- 已公告强赎：取该债 announce_type='强赎' 的最新一条公告 ----
+    redeem_ann = None
+    try:
+        rans = get_bond_announcements(code, "强赎")
+        if rans:
+            redeem_ann = rans[0]
+    except Exception:
+        redeem_ann = None
+
     return render_template("bond.html", bond=bond, code=code,
                            down_count=count, down_records=records,
                            dr_updated=dr_updated,
@@ -693,7 +716,10 @@ def bond_detail(code):
                            eff_tp=eff_tp,
                            daily=daily,
                            redemption_warn=redemption_warn,
-                           down_revise_warn=down_revise_warn)
+                           down_revise_warn=down_revise_warn,
+                           conv_value=conv_value,
+                           redemption_price=redemption_price,
+                           redeem_ann=redeem_ann)
 
 
 @app.route("/api/bond/<code>/holders")

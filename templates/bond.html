@@ -72,6 +72,19 @@
   </div>
   {% endif %}
 
+  {% if redeem_ann %}
+  <div class="redeem-banner">
+    <span class="rb-icon">🚨</span>
+    <div class="rb-body">
+      <b>已公告强赎</b>：{{ bond.bond_name }}（{{ code }}）已发布强赎公告，持有人须于赎回登记日前及时卖出或转股，否则将被以赎回价强制赎回，面临大幅亏损风险。
+      <div class="rb-meta">
+        {% if redeem_ann.announce_date %}<span>公告日：{{ redeem_ann.announce_date }}</span>{% endif %}
+        {% if redeem_ann.official_url %}<a class="rb-link" href="{{ redeem_ann.official_url }}" target="_blank" rel="noopener">查看公告原文 ›</a>{% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {% if not bond.is_delisted %}
   <div class="update-bar" id="updateBar" style="display:none">
     <span class="upd-info" id="updInfo"></span>
@@ -94,9 +107,11 @@
   <div class="info-cards">
     <div class="info"><div class="num">{{ '%.2f'|format(bond.current_price) if bond.current_price else '-' }}</div><div class="label">现价(元)</div></div>
     <div class="info"><div class="num">{{ '%.2f'|format(eff_tp) if eff_tp is not none else '-' }}</div><div class="label">转股价(元)</div></div>
+    <div class="info"><div class="num">{{ '%.2f'|format(conv_value) if conv_value is not none else '-' }}</div><div class="label">转股价值(元)</div></div>
     <div class="info"><div class="num">{{ bond.issue_scale or '-' }}</div><div class="label">发行规模(亿)</div></div>
     <div class="info"><div class="num">{{ bond.listing_date or '-' }}</div><div class="label">上市日</div></div>
     <div class="info"><div class="num">{{ bond.expire_date or '-' }}</div><div class="label">到期日</div></div>
+    <div class="info"><div class="num">{{ '%.2f'|format(redemption_price) if redemption_price is not none else '-' }}</div><div class="label">到期赎回价(元)</div></div>
   </div>
 
   <div class="stat-cards">
