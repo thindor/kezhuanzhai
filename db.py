@@ -1215,18 +1215,69 @@ def _bond_entry_exit_map(weeks, week_rows):
     return first_seen, last_seen
 
 
+def _load_closes_for_codes(codes):
+    """批量载入指定转债的每日收盘价：{code: [(trade_date, bond_close), ...] 升序}。"""
+    if not codes:
+        return {}
+    conn = get_conn()
+    cur = conn.cursor()
+    ph = ",".join("?" * len(codes))
+    rows = cur.execute(
+        "SELECT bond_code, trade_date, bond_close FROM daily_close "
+        "WHERE bond_code IN (%s)" % ph, codes).fetchall()
+    conn.close()
+    d = {}
+    for code, td, bc in rows:
+        if bc is None:
+            continue
+        d.setdefault(code, []).append((td, bc))
+    for code in d:
+        d[code].sort()
+    return d
+
+
+def _close_on_or_before(closes, code, date):
+    """取 code 在 <= date 的最近一个交易日收盘价（date 为 'YYYY-MM-DD' 字符串）。"""
+    arr = closes.get(code)
+    if not arr:
+        return None
+    lo, hi, res = 0, len(arr) - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if arr[mid][0] <= date:
+            res = arr[mid][1]
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return res
+
+
 def get_double_low_history():
     """返回所有轮动周（降序）明细，含每期调出债的持有收益。
 
-    收益完全基于每周轮动快照里存好的 bond_price（每次轮动必写，不依赖每日行情源）：
-    某债 '调入价' = 其首次进入组合那周快照的 bond_price；'调出价' = 其最后一次
-    持有周快照的 bond_price；持有收益 = (调出价-调入价)/调入价。
+    收益价格口径（修正版）：不再使用轮动快照里曾被限流冻结的 bond_price，
+    而是按每只转债的『轮动周一』去 daily_close 取当日真实收盘价（取 <= 该周一的
+    最近交易日，daily_close 无数据才回退快照价）。这样收益反映真实市价变动，
+    避免限流期间价格冻结导致的 0.00% 失真。
+      - 调入价 = 首次进入组合那周周一的真实收盘
+      - 调出价 = 本轮被调出那周周一的真实收盘（即实际卖出日）
+      - 持有收益 = (调出价-调入价)/调入价
     本期轮动收益 = 本期调出债持有收益的等权平均（None 时不计）。
     """
     weeks, week_rows = _load_all_double_low_snapshots()
     if not weeks:
         return []
-    first_seen, last_seen = _bond_entry_exit_map(weeks, week_rows)
+    first_seen, _ = _bond_entry_exit_map(weeks, week_rows)
+    all_codes = set()
+    for ws in week_rows:
+        for r in week_rows[ws]:
+            all_codes.add(r["bond_code"])
+    closes = _load_closes_for_codes(list(all_codes))
+
+    def real_price(code, ws, snap_price):
+        c = _close_on_or_before(closes, code, ws)
+        return c if c is not None else snap_price
+
     weeks_desc = list(reversed(weeks))
     out = []
     for i, ws in enumerate(weeks_desc):
@@ -1234,19 +1285,27 @@ def get_double_low_history():
         prev_ws = weeks_desc[i + 1] if i + 1 < len(weeks_desc) else None
         prev_codes = {r["bond_code"] for r in week_rows[prev_ws]} if prev_ws else set()
         cur_codes = {r["bond_code"] for r in rows}
-        entered = [r for r in rows if r["bond_code"] not in prev_codes]
+        entered = []
+        for r in rows:
+            if r["bond_code"] not in prev_codes:
+                ew, ep_snap = first_seen[r["bond_code"]]
+                entered.append({**r, "entry_week": ew,
+                                "entry_price": real_price(r["bond_code"], ew, ep_snap)})
         exited = []
         if prev_ws:
             for r in week_rows[prev_ws]:
                 if r["bond_code"] not in cur_codes:
                     code = r["bond_code"]
-                    entry_ws, entry_price = first_seen[code]
-                    exit_ws, exit_price = last_seen[code]
+                    ew, ep_snap = first_seen[code]
+                    entry_price = real_price(code, ew, ep_snap)
+                    exit_price = real_price(code, ws, r["bond_price"])  # 调出=轮动周一真实收盘
                     ret = None
                     if entry_price and exit_price and entry_price > 0:
                         ret = (exit_price - entry_price) / entry_price * 100.0
-                    exited.append({**r, "entry_week": entry_ws, "entry_price": entry_price,
-                                   "exit_price": exit_price,
+                    exited.append({**r, "entry_week": ew,
+                                   "entry_price": round(entry_price, 2) if entry_price else None,
+                                   "exit_week": ws,
+                                   "exit_price": round(exit_price, 2) if exit_price else None,
                                    "return_pct": round(ret, 2) if ret is not None else None})
         rets = [e["return_pct"] for e in exited if e["return_pct"] is not None]
         week_return = round(sum(rets) / len(rets), 2) if rets else None
@@ -1257,21 +1316,34 @@ def get_double_low_history():
 
 
 def get_double_low_holds():
-    """当前持仓（最新一周快照）含调入价与累计（未实现）收益。"""
+    """当前持仓（最新一周快照）含调入价与累计（未实现）收益。
+
+    调入价 = 首次进入周周一真实收盘；当前价 = daily_close 最新可得收盘（mark-to-market），
+    全部优先用 daily_close 真实价，缺失才回退快照 bond_price。
+    """
     weeks, week_rows = _load_all_double_low_snapshots()
     if not weeks:
         return []
     first_seen, _ = _bond_entry_exit_map(weeks, week_rows)
     latest_ws = weeks[-1]
+    all_codes = [r["bond_code"] for r in week_rows[latest_ws]]
+    closes = _load_closes_for_codes(all_codes)
+
+    def real_price(code, ws, snap_price):
+        c = _close_on_or_before(closes, code, ws)
+        return c if c is not None else snap_price
+
     rows = []
     for r in week_rows[latest_ws]:
         code = r["bond_code"]
-        ew, ep = first_seen.get(code, (latest_ws, r["bond_price"]))
-        cur_price = r["bond_price"]
+        ew, ep_snap = first_seen.get(code, (latest_ws, r["bond_price"]))
+        entry_price = real_price(code, ew, ep_snap)
+        cur_price = real_price(code, "2099-12-31", r["bond_price"])  # 最新可得收盘
         ret = None
-        if ep and cur_price and ep > 0:
-            ret = (cur_price - ep) / ep * 100.0
-        rows.append({**r, "entry_week": ew, "entry_price": ep,
+        if entry_price and cur_price and entry_price > 0:
+            ret = (cur_price - entry_price) / entry_price * 100.0
+        rows.append({**r, "entry_week": ew,
+                     "entry_price": round(entry_price, 2) if entry_price else None,
                      "hold_return": round(ret, 2) if ret is not None else None})
     return rows
 

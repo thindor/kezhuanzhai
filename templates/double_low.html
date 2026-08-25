@@ -150,7 +150,7 @@
           <div class="hist-sub"><b class="rot-in">🟢 进入 {{ wk.entered|length }} 只</b></div>
           <ul class="rot-list compact">
             {% for r in wk.entered %}
-            <li><a class="nm" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a> {{ r.bond_name or '-' }} <span class="dl-mini">调入价 {{ '%.2f'|format(r.bond_price|float) }}</span></li>
+            <li><a class="nm" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a> {{ r.bond_name or '-' }} <span class="dl-mini">调入价 {{ '%.2f'|format(r.entry_price|float) }}（{{ r.entry_week[5:] }}）</span></li>
             {% endfor %}
           </ul>
           {% endif %}
@@ -159,7 +159,7 @@
           <ul class="rot-list compact">
             {% for r in wk.exited %}
             <li><a class="nm" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a> {{ r.bond_name or '-' }}
-              <span class="dl-mini">调入 {{ '%.2f'|format(r.entry_price|float) }} → 调出 {{ '%.2f'|format(r.exit_price|float) }}</span>
+              <span class="dl-mini">调入({{ r.entry_week[5:] }}) {{ '%.2f'|format(r.entry_price|float) }} → 调出({{ r.exit_week[5:] }}) {{ '%.2f'|format(r.exit_price|float) }}</span>
               {% if r.return_pct is not none %}<span class="ret {% if r.return_pct >= 0 %}up{% else %}down{% endif %}">{{ '%+.2f'|format(r.return_pct) }}%</span>{% endif %}
             </li>
             {% endfor %}
