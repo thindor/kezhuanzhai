@@ -790,6 +790,40 @@ def _secid(code):
     return "0." + code
 
 
+_EM_REACHABLE = None  # None=尚未探测; True/False=东财 kline 接口是否可达（探测一次后缓存）
+
+
+def _probe_eastmoney_reachable():
+    """探测东财 kline 接口是否可达（仅首次调用时实际探测，之后复用缓存）。
+
+    背景：部分运行环境（如带失效本地代理、或数据中心 IP 被东财 reset 的沙箱）
+    东财主源根本连不通。原实现会对每只债空跑 3 次重试+退避再降级新浪，
+    316 只债累计浪费约 20+ 分钟。此处首个调用时探测一次：不可达则后续
+    直接走新浪兜底，省掉每只债的死循环。生产环境东财可达时返回 True，行为不变。
+    """
+    global _EM_REACHABLE
+    if _EM_REACHABLE is not None:
+        return _EM_REACHABLE
+    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    params = {
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "klt": 101, "fqt": 1, "secid": "1.000001",  # 用上证指数探活，避免依赖个债数据
+        "beg": 0, "end": "20500101", "lmt": 1,
+        "ut": "fa5fd1943c7b386f172d6893dbfbaa15",
+    }
+    try:
+        r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        d = r.json()
+        reachable = bool((d.get("data") or {}).get("klines"))
+    except Exception:
+        reachable = False
+    _EM_REACHABLE = reachable
+    if not reachable:
+        print("[daily] 东财 kline 接口不可达（代理/网络被拦），本轮行情采集直连新浪兜底")
+    return reachable
+
+
 def fetch_sina_kline(code, datalen=320):
     """日K线收盘价，返回 list[(trade_date, close)] 升序。
 
@@ -807,27 +841,29 @@ def fetch_sina_kline(code, datalen=320):
         "ut": "fa5fd1943c7b386f172d6893dbfbaa15",
     }
     out = []
-    # 东财偶发限流返回空，重试 2 次(退避)以提升采集可靠性
-    for attempt in range(3):
-        try:
-            r = requests.get(url, params=params, timeout=15,
-                             headers={"User-Agent": "Mozilla/5.0"})
-            d = r.json()
-            kd = d.get("data") or {}
-            klines = kd.get("klines") or []
-            for kl in klines:
-                parts = kl.split(",")
-                if len(parts) >= 3:
-                    try:
-                        out.append((parts[0], float(parts[2])))
-                    except (ValueError, TypeError):
-                        continue
-            if out:
-                return out
-        except Exception:
-            pass
-        if attempt < 2:
-            time.sleep(1.2)
+    # 东财偶发限流返回空，重试 2 次(退避)以提升采集可靠性；
+    # 先经一次可达性探测：不可达环境(如沙箱)直接跳过，省去每只债的死循环重试
+    if _probe_eastmoney_reachable():
+        for attempt in range(3):
+            try:
+                r = requests.get(url, params=params, timeout=15,
+                                 headers={"User-Agent": "Mozilla/5.0"})
+                d = r.json()
+                kd = d.get("data") or {}
+                klines = kd.get("klines") or []
+                for kl in klines:
+                    parts = kl.split(",")
+                    if len(parts) >= 3:
+                        try:
+                            out.append((parts[0], float(parts[2])))
+                        except (ValueError, TypeError):
+                            continue
+                if out:
+                    return out
+            except Exception:
+                pass
+            if attempt < 2:
+                time.sleep(1.2)
     # 兜底：新浪
     try:
         sym = _sina_symbol(code)
