@@ -688,9 +688,13 @@ def bond_detail(code):
 
     # ---- 每日收盘价历史（转债 + 正股）+ 强赎预警 ----
     daily = get_daily_close(code, 250)
-    redemption_warn = crawler.compute_redemption_warning(code)
-    # 已公告强赎的转债不会再下修，跳过下修周期计算与提醒
-    down_revise_warn = None if redeem_ann else crawler.compute_down_revise_warning(code)
+    # 已公告强赎的转债：强赎预警/下修提醒均无意义，跳过计算
+    if redeem_ann:
+        redemption_warn = None
+        down_revise_warn = None
+    else:
+        redemption_warn = crawler.compute_redemption_warning(code)
+        down_revise_warn = crawler.compute_down_revise_warning(code)
 
     # ---- 转股价值 = 100 / 转股价 × 正股价（正股价取最新一日收盘价） ----
     conv_value = None
