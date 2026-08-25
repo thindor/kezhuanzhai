@@ -161,7 +161,9 @@
         {% if data.revise_warn %}
         <div class="warn-line warn-{{ data.revise_warn.level }}">💡 下修提醒：近30日 {{ data.revise_warn.satisfy_cnt }}/15 日正股低于转股价85%{% if data.revise_warn.status == 'triggered' %}（已满足下修条件）{% else %}，约 {{ data.revise_warn.remaining }} 交易日触发{% endif %}。</div>
         {% endif %}
-        {% if not data.redeem_warn and not data.revise_warn %}
+        {% if data.redeem_ann %}
+        <div class="warn-line warn-urgent">🔴 已公告强赎：该转债已发布强赎公告，不再展示强赎/下修预警；须于赎回登记日前卖出或转股，否则将被以赎回价强制赎回。</div>
+        {% elif not data.redeem_warn and not data.revise_warn %}
         <div class="warn-line">当前未触发强赎/下修预警条件。</div>
         {% endif %}
       </div>

@@ -21,7 +21,8 @@ import re
 import requests
 from datetime import datetime, date
 
-from db import (get_bond, get_periods_info, get_holders, get_down_revise)
+from db import (get_bond, get_periods_info, get_holders, get_down_revise,
+               get_bond_announcements)
 import crawler
 
 EM_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -459,9 +460,22 @@ def get_checkup(code):
     if force_price and sp:
         upside_to_redeem = (force_price / sp - 1.0) * 100.0
 
-    # 预警（复用 crawler）
-    redeem_warn = crawler.compute_redemption_warning(code)
-    revise_warn = crawler.compute_down_revise_warning(code)
+    # 已公告强赎：取该债 announce_type='强赎' 的最新一条公告
+    redeem_ann = None
+    try:
+        rans = get_bond_announcements(code, "强赎")
+        if rans:
+            redeem_ann = rans[0]
+    except Exception:
+        redeem_ann = None
+
+    # 预警（复用 crawler）；已公告强赎的转债不会再下修、强赎预警也无意义，跳过计算
+    if redeem_ann:
+        redeem_warn = None
+        revise_warn = None
+    else:
+        redeem_warn = crawler.compute_redemption_warning(code)
+        revise_warn = crawler.compute_down_revise_warning(code)
 
     # 持有人结构
     holder = _holder_summary(code)
@@ -538,6 +552,7 @@ def get_checkup(code):
         "down_potential": down_potential,
         "redeem_warn": redeem_warn,
         "revise_warn": revise_warn,
+        "redeem_ann": redeem_ann,
         "holder": holder,
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source": "东财(自算债底/YTM) + 集思录(增强) + 腾讯行情(实时)",
