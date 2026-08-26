@@ -36,7 +36,31 @@ body {
   .topbar nav a:last-child { border-bottom: none; }
   .topbar nav a.active { border-left: 3px solid #2f6fed; padding-left: 10px; }
 }
+/* 全站紧凑搜索框（导航条内，二级入口，不抢眼） */
+.nav-search { position: relative; display: flex; align-items: center; gap: 6px; margin-left: 16px; }
+.nav-search input { width: 168px; padding: 7px 11px; border: 1px solid #d7dce5; border-radius: 8px; font-size: 13px; outline: none; background: #fff; color: #1c2433; }
+.nav-search input:focus { border-color: #2f6bff; box-shadow: 0 0 0 3px rgba(47,107,255,.12); }
+.nav-search button { border: none; background: #2f6bff; color: #fff; border-radius: 8px; padding: 7px 11px; cursor: pointer; font-size: 14px; line-height: 1; }
+.nav-search button:hover { background: #1f56e0; }
+/* 搜索候选下拉（导航与首页共用） */
+.cb-suggest { position: absolute; top: 100%; right: 0; min-width: 268px; max-height: 360px; overflow: auto;
+  background: #fff; border: 1px solid #eef1f6; border-radius: 10px; box-shadow: 0 12px 32px rgba(20,40,80,.16);
+  z-index: 200; margin-top: 8px; padding: 6px; }
+.cb-suggest-empty { padding: 10px 12px; color: #8a93a6; font-size: 13px; }
+.cb-suggest-hint { padding: 6px 12px; color: #8a93a6; font-size: 12px; }
+.cb-suggest-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; text-decoration: none; color: #1c2433; }
+.cb-suggest-item:hover { background: #f3f6ff; }
+.cb-si-name { font-weight: 600; font-size: 14px; }
+.cb-si-code { color: #8a93a6; font-size: 12px; }
+.cb-si-stock { margin-left: auto; color: #8a93a6; font-size: 12px; }
+/* 首页 hero 搜索框的下拉左对齐（hero 在左侧） */
+.hero .cb-suggest { left: 0; right: auto; }
 .link { color: #2f6fed; text-decoration: none; font-size: 14px; }
+@media (max-width: 860px) {
+  .nav-search { margin-left: 10px; }
+  .nav-search input { width: 116px; font-size: 12px; padding: 6px 9px; }
+  .cb-suggest { min-width: 220px; left: auto; right: 0; }
+}
 .link:hover { text-decoration: underline; }
 
 /* 全站数据新鲜度条：展示『数据截至』日期，让用户一眼判断数字新鲜度 */

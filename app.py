@@ -215,6 +215,29 @@ def get_search_index():
     return _fast_index()
 
 
+def _score_bond(b, q, ql):
+    """单债与查询 q 的相关度评分（越小越优，99=不相关）。"""
+    name = b.get("bond_name") or ""
+    sname = b.get("stock_name") or ""
+    py = b.get("py") or ""
+    spy = b.get("spy") or ""
+    if not name and not sname:
+        return 99
+    if name == q or sname == q:
+        return 1
+    if py and py == ql:
+        return 2
+    if spy and spy == ql:
+        return 2
+    if q in name or q in sname or name in q or sname in q:
+        return 3
+    if py and ql in py:
+        return 4
+    if spy and ql in spy:
+        return 4
+    return 99
+
+
 def resolve_query(q):
     """将用户输入（代码 / 名称 / 简拼）解析为 6 位转债代码；无法解析返回 None。"""
     q = (q or "").strip()
@@ -224,34 +247,25 @@ def resolve_query(q):
         return q
     idx = get_search_index()
     ql = q.lower()
-
-    def score(b):
-        name = b.get("bond_name") or ""
-        sname = b.get("stock_name") or ""
-        py = b.get("py") or ""
-        spy = b.get("spy") or ""
-        if not name and not sname:
-            return 99
-        if name == q or sname == q:
-            return 1
-        if py and py == ql:
-            return 2
-        if spy and spy == ql:
-            return 2
-        if q in name or q in sname or name in q or sname in q:
-            return 3
-        if py and ql in py:
-            return 4
-        if spy and ql in spy:
-            return 4
-        return 99
-
-    cands = [(score(b), b) for b in idx]
-    cands = [c for c in cands if c[0] < 99]
+    cands = [(s, b) for b in idx for s in [_score_bond(b, q, ql)] if s < 99]
     if not cands:
         return None
     cands.sort(key=lambda x: x[0])
     return cands[0][1].get("bond_code")
+
+
+def search_candidates(q, limit=8):
+    """返回 q 的候选转债列表（按相关度升序），供前端歧义选择；可能多个同分。"""
+    q = (q or "").strip()
+    if not q:
+        return []
+    idx = get_search_index()
+    if re.fullmatch(r"\d{6}", q):
+        return [b for b in idx if b.get("bond_code") == q][:limit]
+    ql = q.lower()
+    scored = [(s, b) for b in idx for s in [_score_bond(b, q, ql)] if s < 99]
+    scored.sort(key=lambda x: x[0])
+    return [b for _, b in scored[:limit]]
 
 
 def _days_since(ts):
@@ -306,6 +320,18 @@ def index():
     return render_template("index.html", code=code, persons=persons,
                            ranking=ranking, inst_ranking=inst_ranking, recent=recent,
                            market=market, trend=trend, ew=ew, ew_trend=ew_trend)
+
+
+@app.route("/api/search")
+def api_search():
+    """按代码 / 名称 / 简拼返回候选列表，供前端歧义选择（单结果直跳、多结果展示候选）。"""
+    q = (request.args.get("q") or "").strip()
+    results = search_candidates(q)
+    return jsonify(results=[{
+        "bond_code": b.get("bond_code"),
+        "bond_name": b.get("bond_name") or "",
+        "stock_name": b.get("stock_name") or "",
+    } for b in results])
 
 
 @app.route("/api/bond/<code>")

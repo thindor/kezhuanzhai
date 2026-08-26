@@ -1,0 +1,26 @@
+<header class="topbar">
+  <a class="brand" href="/">{% if site_logo %}<img class="brand-logo" src="{{ site_logo }}" alt="">{% endif %}{{ site_name }}</a>
+  <button class="nav-toggle" type="button" aria-label="展开/收起菜单" aria-expanded="false" onclick="var n=document.getElementById('mainNav');var o=n.classList.toggle('open');this.setAttribute('aria-expanded',o);">
+    <span></span><span></span><span></span>
+  </button>
+  <nav id="mainNav">
+    <a href="/" class="{{ 'active' if request.path == '/' }}">首页</a>
+    <a href="/bonds" class="{{ 'active' if request.path.startswith('/bonds') }}">全部转债</a>
+    <a href="/persons" class="{{ 'active' if request.path.startswith('/persons') or request.path.startswith('/person') }}">牛散榜</a>
+    <a href="/institutions" class="{{ 'active' if request.path.startswith('/institutions') }}">机构榜</a>
+    <a href="/announcements" class="{{ 'active' if request.path.startswith('/announcements') }}">可转债公告</a>
+    <a href="/redemption-warnings" class="{{ 'active' if request.path.startswith('/redemption-warnings') }}">强赎预警</a>
+    <a href="/down-revise-warnings" class="{{ 'active' if request.path.startswith('/down-revise-warnings') }}">下修提醒</a>
+    <a href="/double-low" class="{{ 'active' if request.path.startswith('/double-low') }}">双低策略</a>
+    <a href="/new-bonds" class="{{ 'active' if request.path.startswith('/new-bonds') }}">新发转债</a>
+    <a href="/xiaopanzhai" class="{{ 'active' if request.path.startswith('/xiaopanzhai') }}">小盘债</a>
+    <a href="/admin" class="{{ 'active' if request.path.startswith('/admin') }}">管理后台</a>
+  </nav>
+  <form class="nav-search" onsubmit="return false;">
+    <input id="navSearchInput" type="text" placeholder="搜转债/代码/简拼" onkeydown="if(event.key==='Enter')cbSearch('navSearchInput','navSearchBox')" aria-label="搜索可转债">
+    <button type="button" onclick="cbSearch('navSearchInput','navSearchBox')" aria-label="搜索">🔍</button>
+    <div id="navSearchBox" class="cb-suggest" style="display:none"></div>
+  </form>
+</header>
+<script src="/static/search.js" defer></script>
+<div class="freshness"><span class="dot"></span>数据截至 <b>{{ data_as_of }}</b> · 每日 16:30 收盘后自动更新（盘中实时价请点对应刷新按钮）</div>

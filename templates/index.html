@@ -33,7 +33,7 @@
   .hero h1 { font-size:30px; margin:0 0 8px; letter-spacing:1px; }
   .hero p.sub { color:#6b7280; font-size:15px; margin:0 0 22px; }
   .search-box {
-    display:flex; gap:8px; max-width:720px; margin:0 auto;
+    display:flex; gap:8px; max-width:720px; margin:0 auto; position:relative;
   }
   .search-box input {
     flex:1; height:46px; border:1px solid #d8dee9; border-radius:24px;
@@ -189,8 +189,9 @@
   <h1>{{ site_name }}</h1>
   <p class="sub">输入代码 / 名称 / 简拼，查十大持有人、基金持仓与自然人持仓；下方自动聚合持有可转债的牛散，按持仓市值排序</p>
   <div class="search-box">
-    <input id="codeInput" placeholder="输入代码 / 名称 / 简拼，如 127061、美锦、mjzz" value="{{ code }}">
-    <button onclick="doSearch()">查询</button>
+    <input id="codeInput" placeholder="输入代码 / 名称 / 简拼，如 127061、美锦、mjzz" value="{{ code }}" onkeydown="if(event.key==='Enter')cbSearch('codeInput','heroSearchBox')">
+    <button onclick="cbSearch('codeInput','heroSearchBox')">查询</button>
+    <div id="heroSearchBox" class="cb-suggest" style="display:none"></div>
   </div>
   <div class="status" id="status" style="text-align:center"></div>
 </section>
@@ -340,28 +341,6 @@
 </section>
 
 <script>
-function doSearch(){
-  const code = document.getElementById('codeInput').value.trim();
-  if(!code){ return; }
-  const status = document.getElementById('status');
-  status.textContent = '加载中...';
-  // 预检转债是否存在；存在则跳转到 SEO 友好的详情页 /bond/<code>
-  fetch('/api/bond/' + encodeURIComponent(code))
-    .then(r => r.json())
-    .then(data => {
-      if(data.bond){
-        window.location.href = '/bond/' + encodeURIComponent(data.bond.bond_code || code);
-      } else {
-        status.textContent = (data.message || '未找到匹配的可转债');
-      }
-    })
-    .catch(e => { status.textContent = '请求出错：' + e.message; });
-}
-
-document.getElementById('codeInput').addEventListener('keydown', e => {
-  if(e.key === 'Enter'){ doSearch(); }
-});
-
 window.addEventListener('DOMContentLoaded', ()=>{
   const v = document.getElementById('codeInput').value.trim();
   if(v){
