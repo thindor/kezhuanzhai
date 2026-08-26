@@ -722,15 +722,73 @@ def bond_detail(code):
         redemption_warn = crawler.compute_redemption_warning(code)
         down_revise_warn = crawler.compute_down_revise_warning(code)
 
-    # ---- 转股价值 = 100 / 转股价 × 正股价（正股价取最新一日收盘价） ----
-    conv_value = None
-    if eff_tp is not None and daily:
-        last_stock = daily[-1].get("stock_close")
-        if last_stock:
+    # ---- 丰富指标（复用体检卡引擎：纯债价值/YTM/触发价/PB 等） ----
+    try:
+        cu = checkup.get_checkup(code)
+    except Exception:
+        cu = {}
+    cu = cu or {}
+
+    # ---- 转股价值修复：取 daily 最新【非空】正股收盘价（与走势图一致），
+    #      末日空 bar 或缺失时回退腾讯实时价；彻底解决算不出转股价值的问题 ----
+    stock_price = None
+    for row in reversed(daily):
+        sc = row.get("stock_close")
+        if sc:
             try:
-                conv_value = round(100.0 / float(eff_tp) * float(last_stock), 2)
+                stock_price = float(sc)
+                break
             except (TypeError, ValueError):
-                conv_value = None
+                pass
+    if stock_price is None and cu.get("stock_price"):
+        stock_price = cu.get("stock_price")
+
+    conv_value = None
+    if eff_tp is not None and stock_price is not None:
+        try:
+            conv_value = round(100.0 / float(eff_tp) * float(stock_price), 2)
+        except (TypeError, ValueError):
+            conv_value = None
+
+    # 转股溢价率 = (现价/转股价值 - 1) × 100%
+    premium = None
+    bp = bond.get("current_price")
+    if bp is not None and conv_value:
+        try:
+            premium = round((float(bp) / conv_value - 1.0) * 100.0, 2)
+        except (TypeError, ValueError):
+            premium = None
+
+    # 双低值 = 现价 + 转股溢价率
+    double_low = None
+    if bp is not None and premium is not None:
+        double_low = round(float(bp) + premium, 2)
+
+    # 债性指标（体检卡引擎估算：东财票面利率 + 评级贴现）
+    pure_value = cu.get("pure_value")
+    pure_value_est = cu.get("pure_value_est")
+    ytm = cu.get("ytm")
+    year_left = cu.get("year_left")
+    pb = cu.get("pb")
+
+    # 纯债溢价率 = (现价/纯债价值 - 1) × 100%
+    pure_premium = None
+    if bp is not None and pure_value:
+        try:
+            pure_premium = round((float(bp) / float(pure_value) - 1.0) * 100.0, 2)
+        except (TypeError, ValueError):
+            pure_premium = None
+
+    # 条款触发价（市场通用口径：强赎130%/回售70%/下修85%，以各债公告条款为准）
+    force_price = round(eff_tp * 1.3, 2) if eff_tp is not None else None
+    put_price = round(eff_tp * 0.7, 2) if eff_tp is not None else None
+    down_trig = round(eff_tp * 0.85, 2) if eff_tp is not None else None
+
+    # 剩余规模（优先集思录 curr_iss_amt 持久化值；取不到回退发行规模并标注）
+    remaining_scale = bond.get("remaining_scale")
+    is_remaining = remaining_scale is not None
+    if not is_remaining:
+        remaining_scale = bond.get("issue_scale")
 
     # ---- 到期赎回价（bonds 表 redemption_price 列） ----
     redemption_price = bond.get("redemption_price")
@@ -750,7 +808,21 @@ def bond_detail(code):
                            down_revise_warn=down_revise_warn,
                            conv_value=conv_value,
                            redemption_price=redemption_price,
-                           redeem_ann=redeem_ann)
+                           redeem_ann=redeem_ann,
+                           stock_price=stock_price,
+                           premium=premium,
+                           double_low=double_low,
+                           pure_value=pure_value,
+                           pure_value_est=pure_value_est,
+                           pure_premium=pure_premium,
+                           ytm=ytm,
+                           year_left=year_left,
+                           pb=pb,
+                           force_price=force_price,
+                           put_price=put_price,
+                           down_trig=down_trig,
+                           remaining_scale=remaining_scale,
+                           is_remaining=is_remaining)
 
 
 @app.route("/api/bond/<code>/holders")

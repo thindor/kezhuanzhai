@@ -26,6 +26,7 @@ def init_db():
         expire_date          TEXT,
         current_transfer_price TEXT,
         current_price        REAL,
+        remaining_scale      REAL,
         data_source          TEXT,
         created_at           TEXT,
         updated_at           TEXT
@@ -71,7 +72,7 @@ def init_db():
     # 兼容旧库：退市标记字段（is_delisted / delist_date）
     cur.execute("PRAGMA table_info(bonds)")
     bcols3 = [r[1] for r in cur.fetchall()]
-    for col, ctype in [("is_delisted", "INTEGER"), ("delist_date", "TEXT")]:
+    for col, ctype in [("is_delisted", "INTEGER"), ("delist_date", "TEXT"), ("remaining_scale", "REAL")]:
         if col not in bcols3:
             cur.execute("ALTER TABLE bonds ADD COLUMN %s %s" % (col, ctype))
     # 最近检索/浏览的转债（首页快捷入口）

@@ -22,7 +22,7 @@ import requests
 from datetime import datetime, date
 
 from db import (get_bond, get_periods_info, get_holders, get_down_revise,
-               get_bond_announcements)
+               get_bond_announcements, get_conn)
 import crawler
 
 EM_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -263,6 +263,30 @@ def _f(v):
         return float(v)
     except (ValueError, TypeError):
         return None
+
+
+def refresh_remaining_scales():
+    """集思录前30活跃债 curr_iss_amt(剩余规模,亿) -> bonds.remaining_scale。
+
+    东财 RPT_BOND_CB_LIST 无剩余规模字段；集思录匿名仅返回前30活跃债，故逐日
+    滚动补全（债券进入活跃榜即写入）。返回写入条数；异常时静默返回 0。"""
+    try:
+        jsl = fetch_jsl_cb_list(force=True)
+    except Exception:
+        return 0
+    if not jsl:
+        return 0
+    conn = get_conn()
+    cur = conn.cursor()
+    n = 0
+    for bid, c in jsl.items():
+        rs = _f(c.get("curr_iss_amt"))
+        if rs is not None:
+            cur.execute("UPDATE bonds SET remaining_scale=? WHERE bond_code=?", (rs, bid))
+            n += 1
+    conn.commit()
+    conn.close()
+    return n
 
 
 def _qx(code):

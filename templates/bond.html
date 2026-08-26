@@ -99,6 +99,43 @@
     <div class="info"><div class="num">{{ '%.2f'|format(redemption_price) if redemption_price is not none else '-' }}</div><div class="label">到期赎回价(元)</div></div>
   </div>
 
+  <section class="panel metrics-panel">
+    <div class="section-head">
+      <h3>📊 核心指标</h3>
+      <span class="hint">债底/YTM 由东财票面利率+评级贴现估算；触发价按市场通用 130%/70%/85% 测算，以各债公告条款为准</span>
+    </div>
+    <div class="metric-groups">
+      <div class="metric-group">
+        <h4>股性</h4>
+        <div class="metric-grid">
+          <div class="metric"><div class="num">{{ '%.2f'|format(stock_price) if stock_price is not none else '-' }}</div><div class="label">正股价格(元)</div></div>
+          <div class="metric"><div class="num">{{ '%.2f'|format(conv_value) if conv_value is not none else '-' }}</div><div class="label">转股价值(元)</div></div>
+          <div class="metric"><div class="num">{{ ('%.2f%%'|format(premium)) if premium is not none else '-' }}</div><div class="label">转股溢价率</div></div>
+          <div class="metric"><div class="num">{{ '%.2f'|format(double_low) if double_low is not none else '-' }}</div><div class="label">双低值</div></div>
+        </div>
+      </div>
+      <div class="metric-group">
+        <h4>债性</h4>
+        <div class="metric-grid">
+          <div class="metric"><div class="num">{{ '%.2f'|format(pure_value) if pure_value is not none else '-' }}</div><div class="label">纯债价值(元){% if pure_value_est %}*{% endif %}</div></div>
+          <div class="metric"><div class="num">{{ ('%.2f%%'|format(pure_premium)) if pure_premium is not none else '-' }}</div><div class="label">纯债溢价率</div></div>
+          <div class="metric"><div class="num">{{ ('%.2f%%'|format(ytm)) if ytm is not none else '-' }}</div><div class="label">到期收益率YTM</div></div>
+          <div class="metric"><div class="num">{{ '%.2f'|format(year_left) if year_left is not none else '-' }}</div><div class="label">剩余年限(年)</div></div>
+        </div>
+      </div>
+      <div class="metric-group">
+        <h4>条款</h4>
+        <div class="metric-grid">
+          <div class="metric"><div class="num">{{ '%.2f'|format(force_price) if force_price is not none else '-' }}</div><div class="label">强赎触发价(元)</div></div>
+          <div class="metric"><div class="num">{{ '%.2f'|format(put_price) if put_price is not none else '-' }}</div><div class="label">回售触发价(元)</div></div>
+          <div class="metric"><div class="num">{{ '%.2f'|format(down_trig) if down_trig is not none else '-' }}</div><div class="label">下修触发价(元)</div></div>
+          <div class="metric"><div class="num">{{ '%.2f'|format(remaining_scale) if remaining_scale is not none else '-' }}{{ '亿' if remaining_scale is not none else '' }}</div><div class="label">剩余规模{% if not is_remaining %}(≈发行){% endif %}</div></div>
+        </div>
+      </div>
+    </div>
+    {% if pure_value_est %}<p class="hint" style="margin-top:10px">* 纯债价值为评级贴现估算值（非集思录精确债底）；剩余规模取不到时以发行规模近似，实时余额仅活跃债可查。</p>{% endif %}
+  </section>
+
   <div class="stat-cards">
     <div class="stat"><div class="num red">{{ down_count or 0 }}</div><div class="label">历史下修次数</div></div>
     <div class="stat"><div class="num">{{ latest_down_revise.meeting_date if latest_down_revise else '暂无' }}</div><div class="label">最近下修提议(股东大会)</div></div>

@@ -272,6 +272,15 @@ tr.natural td:first-child { box-shadow: inset 3px 0 0 #ffb300; }
 .info .num { font-size:20px; font-weight:800; color:#1a2b50; font-variant-numeric:tabular-nums; line-height:1.2; }
 .info .label { color:#9aa3b2; font-size:12px; margin-top:4px; }
 
+/* 详情页核心指标分组面板 */
+.metrics-panel .metric-groups { display:flex; flex-wrap:wrap; gap:18px; }
+.metric-group { flex:1 1 280px; min-width:260px; }
+.metric-group h4 { margin:0 0 10px; font-size:14px; color:#1f2d3d; border-left:3px solid #2f6fed; padding-left:8px; }
+.metric-grid { display:grid; grid-template-columns:repeat(2, 1fr); gap:10px; }
+.metric { background:#f7f9fc; border:1px solid #eef1f6; border-radius:10px; padding:12px 10px; text-align:center; }
+.metric .num { font-size:20px; font-weight:700; color:#1a2b50; font-variant-numeric:tabular-nums; line-height:1.2; }
+.metric .label { color:#7a869a; font-size:12px; margin-top:4px; }
+
 .stat .num.red { color:#e23b3b; }
 .stat .num.small { font-size:15px; font-weight:700; }
 
