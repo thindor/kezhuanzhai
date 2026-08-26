@@ -206,7 +206,7 @@
     <a class="recent-chip" href="/bond/{{ b.bond_code }}">
       <span class="rc-name">{{ b.bond_name or b.bond_code }}</span>
       <span class="rc-code">{{ b.bond_code }}</span>
-      {% if b.is_delisted %}<span class="delist-badge">已退市</span>{% endif %}
+      {% if b.is_delisted %}<span class="delist-badge">已退市</span>{% endif %}{{ redeem_badge(b.bond_code) }}
     </a>
     {% else %}
     <span class="hint">暂无检索记录，搜索一只可转债试试～</span>
@@ -300,7 +300,7 @@
         <td class="mv">{{ '%.2f 亿'|format(r.mv_wan/10000) if r.mv_wan >= 10000 else '%.1f 万'|format(r.mv_wan) }}</td>
         <td>{{ r.bond_count }} 只</td>
         <td>{{ r.record_count }} 次</td>
-        <td class="top-bonds">{{ r.top_bonds | map(attribute='bond_name') | join('、') }}</td>
+        <td class="top-bonds">{% for tb in r.top_bonds %}{{ tb.bond_name }}{{ redeem_badge(tb.bond_code) }}{% if not loop.last %}、{% endif %}{% endfor %}</td>
       </tr>
     {% endfor %}
     </tbody>
@@ -329,7 +329,7 @@
         <td class="mv">{{ '%.2f 亿'|format(r.mv_wan/10000) if r.mv_wan >= 10000 else '%.1f 万'|format(r.mv_wan) }}</td>
         <td>{{ r.bond_count }} 只</td>
         <td>{{ r.record_count }} 次</td>
-        <td class="top-bonds">{{ r.top_bonds | map(attribute='bond_name') | join('、') }}</td>
+        <td class="top-bonds">{% for tb in r.top_bonds %}{{ tb.bond_name }}{{ redeem_badge(tb.bond_code) }}{% if not loop.last %}、{% endif %}{% endfor %}</td>
       </tr>
     {% endfor %}
     </tbody>

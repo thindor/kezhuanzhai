@@ -64,7 +64,7 @@
           </td>
           <td>
             <a class="nm" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a>
-            <a class="link" href="/bond/{{ r.bond_code }}">{{ r.bond_name or '-' }}</a>
+            <a class="link" href="/bond/{{ r.bond_code }}">{{ r.bond_name or '-' }}</a>{{ redeem_badge(r.bond_code) }}
           </td>
           <td>{% if r.stock_name %}{{ r.stock_name }}（{{ r.stock_code }}）{% else %}-{% endif %}</td>
           <td>{{ r.rating or '-' }}</td>

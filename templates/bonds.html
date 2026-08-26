@@ -66,7 +66,7 @@
       {% for b in rows %}
         <tr>
           <td><a class="link" href="/bond/{{ b.bond_code }}">{{ b.bond_code }}</a></td>
-          <td><a class="nm" href="/bond/{{ b.bond_code }}">{{ b.bond_name or '-' }}</a></td>
+          <td><a class="nm" href="/bond/{{ b.bond_code }}">{{ b.bond_name or '-' }}</a>{{ redeem_badge(b.bond_code) }}</td>
           <td>{{ b.stock_name or '-' }}</td>
           <td>{{ b.rating or '-' }}</td>
           <td>{{ '%.2f'|format(b.current_price) if b.current_price else '-' }}</td>

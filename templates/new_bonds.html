@@ -65,7 +65,7 @@
     {% for r in rows %}
       <tr>
         <td><a class="nb-name" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a></td>
-        <td><a class="nb-name" href="/bond/{{ r.bond_code }}">{{ r.bond_name or r.bond_code }}</a></td>
+        <td><a class="nb-name" href="/bond/{{ r.bond_code }}">{{ r.bond_name or r.bond_code }}</a>{{ redeem_badge(r.bond_code) }}</td>
         <td>{{ r.stock_name or '—' }}{% if r.stock_code %}<div class="nb-code">{{ r.stock_code }}</div>{% endif %}</td>
         <td>{{ r.rating or '—' }}</td>
         <td>{% if r.issue_scale is not none %}{{ '%.2f'|format(r.issue_scale) }}{% else %}—{% endif %}</td>

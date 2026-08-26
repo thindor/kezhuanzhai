@@ -16,6 +16,7 @@
 """
 from flask import (Flask, request, render_template, session, redirect,
                    url_for, jsonify, abort)
+from markupsafe import Markup
 import re
 import os
 import json
@@ -41,7 +42,7 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 get_double_low_holds,
                 compute_market_overview, get_price_trend, get_new_bonds,
                 get_site_settings, save_site_settings,
-                get_latest_data_date)
+                get_latest_data_date, get_redeemed_bond_codes)
 import crawler
 import checkup
 import mini_bond
@@ -302,6 +303,19 @@ def _is_bot():
 def inject_freshness():
     """全局注入『数据截至』日期，供所有模板顶部新鲜度条使用。"""
     return {"data_as_of": get_latest_data_date()}
+
+
+@app.context_processor
+def inject_redeemed():
+    """全局注入已发布强赎公告的转债代码集合与打标函数，供所有列表页标记。"""
+    redeemed = get_redeemed_bond_codes()
+
+    def redeem_badge(code):
+        if code and code in redeemed:
+            return Markup('<span class="badge-redeem" title="已发布强赎公告，注意及时卖出或转股">强赎</span>')
+        return Markup('')
+
+    return {"redeemed_bond_codes": redeemed, "redeem_badge": redeem_badge}
 
 
 # ---------------- 公开查询 ----------------

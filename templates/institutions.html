@@ -47,7 +47,7 @@
         <td class="mv">{{ '%.2f 亿'|format(p.mv_wan/10000) if p.mv_wan >= 10000 else '%.1f 万'|format(p.mv_wan) }}</td>
         <td>{{ p.bond_count }} 只</td>
         <td>{{ p.record_count }} 次</td>
-        <td class="top-bonds">{{ p.top_bonds | map(attribute='bond_name') | join('、') }}</td>
+        <td class="top-bonds">{% for tb in p.top_bonds %}{{ tb.bond_name }}{{ redeem_badge(tb.bond_code) }}{% if not loop.last %}、{% endif %}{% endfor %}</td>
       </tr>
     {% endfor %}
     </tbody>

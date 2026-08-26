@@ -1,7 +1,7 @@
 {% for r in rows %}
 <tr{% if r.tag == 'star' %} class="star"{% elif r.tag == 'low' %} class="low"{% endif %}>
   <td data-sort="{{ r.bond_code }}">{{ r.bond_code }}</td>
-  <td data-sort="{{ r.bond_name }}"><a href="/bond/{{ r.bond_code }}" style="color:#2b6cff;text-decoration:none;font-weight:600">{{ r.bond_name }}</a></td>
+  <td data-sort="{{ r.bond_name }}"><a href="/bond/{{ r.bond_code }}" style="color:#2b6cff;text-decoration:none;font-weight:600">{{ r.bond_name }}</a>{{ redeem_badge(r.bond_code) }}</td>
   <td data-sort="{{ r.stock_name }}">{{ r.stock_name }}</td>
   <td data-sort="{{ r.rating or '' }}">{{ r.rating or '' }}</td>
   <td class="num" data-sort="{{ '%.4f'|format(r.issue_scale) }}">{{ '%.2f'|format(r.issue_scale) }}</td>

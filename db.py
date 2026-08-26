@@ -714,7 +714,7 @@ def get_natural_ranking(limit=50):
                                   "bonds": set(), "top": []})
         a["mv_wan"] += mv
         a["bonds"].add(v["bond_code"])
-        a["top"].append({"bond_name": v["bond_name"] or v["bond_code"], "mv_wan": mv})
+        a["top"].append({"bond_name": v["bond_name"] or v["bond_code"], "bond_code": v["bond_code"], "mv_wan": mv})
 
     result = []
     for name, a in agg.items():
@@ -766,7 +766,7 @@ def get_institution_ranking(limit=50):
                                   "bonds": set(), "top": []})
         a["mv_wan"] += mv
         a["bonds"].add(v["bond_code"])
-        a["top"].append({"bond_name": v["bond_name"] or v["bond_code"], "mv_wan": mv})
+        a["top"].append({"bond_name": v["bond_name"] or v["bond_code"], "bond_code": v["bond_code"], "mv_wan": mv})
 
     result = []
     for name, a in agg.items():
@@ -1020,6 +1020,16 @@ def get_bond_announcements(bond_code, atype=None):
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+def get_redeemed_bond_codes():
+    """返回已发布强赎公告（announce_type='强赎'）的可转债代码集合，供各列表页全局打标。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT bond_code FROM announcements WHERE announce_type='强赎'")
+    s = {r[0] for r in cur.fetchall()}
+    conn.close()
+    return s
 
 
 def get_announcement_type_counts():

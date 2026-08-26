@@ -78,7 +78,7 @@
         {% for h in latest %}
           <tr>
             <td><a class="link" href="/?code={{ h.bond_code }}">{{ h.bond_code }}</a></td>
-            <td><a class="nm" href="/?code={{ h.bond_code }}">{{ h.bond_name or '-' }}</a>{% if h.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}</td>
+            <td><a class="nm" href="/?code={{ h.bond_code }}">{{ h.bond_name or '-' }}</a>{% if h.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}{{ redeem_badge(h.bond_code) }}</td>
             <td>{{ h.stock_name or '-' }}</td>
             <td>{{ h.report_period or '-' }}</td>
             <td>{{ h.periods_count }} 期</td>
@@ -124,7 +124,7 @@
           {% set ncls = {'基金':'fund','个人':'natural','一般机构':'org'}.get(h.holder_nature, 'unknown') %}
           <tr class="{% if h.is_natural %}natural{% endif %}">
             <td><a class="link" href="/?code={{ h.bond_code }}">{{ h.bond_code }}</a></td>
-            <td><a class="nm" href="/?code={{ h.bond_code }}">{{ h.bond_name or '-' }}</a>{% if h.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}</td>
+            <td><a class="nm" href="/?code={{ h.bond_code }}">{{ h.bond_name or '-' }}</a>{% if h.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}{{ redeem_badge(h.bond_code) }}</td>
             <td>{{ h.stock_name or '-' }}</td>
             <td>{{ h.report_period or '-' }}</td>
             <td>{{ h.rank }}</td>
