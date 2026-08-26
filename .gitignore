@@ -21,7 +21,7 @@ bond_index.json
 
 # ---- 旧版 / 备份模板（下划线前缀为历史备份，非线上模板）----
 _*.html
-!templates/_nav.html   # 共用导航片段，非历史备份，必须入库（否则部署端 clone 后全站 500）
+!/templates/_nav.html   # 共用导航片段，非历史备份，必须入库（否则部署端 clone 后全站 500）
 
 # ---- 编辑器 / 系统 ----
 .idea/
