@@ -281,7 +281,7 @@ def refresh_remaining_scales():
     n = 0
     for bid, c in jsl.items():
         rs = _f(c.get("curr_iss_amt"))
-        if rs is not None:
+        if rs is not None and rs > 0:
             cur.execute("UPDATE bonds SET remaining_scale=? WHERE bond_code=?", (rs, bid))
             n += 1
     conn.commit()

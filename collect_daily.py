@@ -5,6 +5,7 @@
   1) crawler.fetch_daily_all()              收盘后刷新行情（写 daily_close，并供 seed 回写 bonds.current_price）
   2) seed_bonds.main()                      刷新基础条款/转股价/退市判定，并用 daily_close 回写 bonds.current_price
   3) mini_bond.ensure_columns()+refresh_all()  刷新小盘债候选（现价/赎回价/历史最高）写回 bonds
+  4) checkup.refresh_remaining_scales()        滚动补全剩余规模（集思录前30活跃债写入 bonds.remaining_scale）
 
 设计要点：
   - 顺序：先行情(daily_close)，再 seed（用 daily_close 回写现价/转股价），再小盘债，沿用现网 16:30→16:35 时序，
@@ -24,6 +25,7 @@ import db
 import crawler
 import seed_bonds
 import mini_bond
+import checkup
 
 
 def _run(step_name, fn):
@@ -45,14 +47,15 @@ def main():
     t_all = time.time()
     print("[collect] 每日采集总入口启动 @ %s" % time.strftime("%Y-%m-%d %H:%M:%S"))
 
-    # 顺序：行情 -> 基础数据 -> 小盘债
+    # 顺序：行情 -> 基础数据 -> 小盘债 -> 剩余规模
     r1 = _run("行情 daily_close", lambda: crawler.fetch_daily_all())
     r2 = _run("基础数据 seed_bonds", lambda: seed_bonds.main())
     r3 = _run("小盘债 mini_bond",
               lambda: (mini_bond.ensure_columns(), mini_bond.refresh_all()))
+    r4 = _run("剩余规模 remaining_scale", checkup.refresh_remaining_scales)
 
-    print("\n[collect] 全部步骤结束：行情=%s 基础=%s 小盘=%s，总耗时 %.1fs"
-          % (r1, r2, r3, time.time() - t_all))
+    print("\n[collect] 全部步骤结束：行情=%s 基础=%s 小盘=%s 剩余规模=%s，总耗时 %.1fs"
+          % (r1, r2, r3, r4, time.time() - t_all))
 
     # 关键步骤（行情/基础）失败则非零退出，调度侧可据此报警
     if not (r1 and r2):

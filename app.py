@@ -786,7 +786,7 @@ def bond_detail(code):
 
     # 剩余规模（优先集思录 curr_iss_amt 持久化值；取不到回退发行规模并标注）
     remaining_scale = bond.get("remaining_scale")
-    is_remaining = remaining_scale is not None
+    is_remaining = remaining_scale is not None and remaining_scale > 0
     if not is_remaining:
         remaining_scale = bond.get("issue_scale")
 
