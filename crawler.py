@@ -21,7 +21,8 @@ from datetime import datetime
 from config import EM_BASE, EM_HEADERS, THS_BASE
 from db import get_conn, upsert_bond, delete_holders, insert_holders, compute_delist, \
     get_bonds_with_down_revise, get_active_trading_bonds, upsert_daily_close, get_daily_close, \
-    get_bond, get_latest_quotes, save_double_low_snapshot, get_latest_double_low, get_double_low_change, _now_str
+    get_bond, get_latest_quotes, save_double_low_snapshot, get_latest_double_low, get_double_low_change, _now_str, \
+    get_redeemed_bond_codes
 
 # akshare 作为可转债事件（强赎/不强赎/下修）的兜底信息源（集思录接口在本机可用）。
 # 导入失败时降级为空实现，不影响其它爬虫。
@@ -1156,10 +1157,15 @@ def compute_double_low_list(topn=20):
 
     价格取 daily_close 最新收盘价（兜底 bonds.current_price）；正股价取 daily_close 最新收盘价。
     仅纳入在交易转债；转股价/价格/正股价任一缺失或非法则跳过。
+    已公告强赎的转债（announcements.announce_type='强赎'）视为离场信号，直接剔除——
+    这样它们在轮动时会被调出（卖出），并由排名下一位的转债补入，保持 20 只。
     """
     res = []
+    redeemed = get_redeemed_bond_codes()
     for b in get_active_trading_bonds():
         code = b["bond_code"]
+        if code in redeemed:
+            continue
         try:
             tp = float(b.get("current_transfer_price") or 0)
         except (TypeError, ValueError):

@@ -1655,6 +1655,23 @@ def get_double_low_holds():
     return rows
 
 
+def get_redeemed_bond_codes():
+    """返回已公告强赎的转债代码集合（announcements.announce_type='强赎'）。
+
+    供双低策略剔除：已宣布强赎的转债应视为「持仓离场信号」，不进入双低候选，
+    从而在本周一/下一轮动被自然调出（卖出）并由下一名补入，保持 20 只。
+    若 announcements 表尚未采集或异常，返回空集（不误剔）。"""
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT bond_code FROM announcements WHERE announce_type='强赎'").fetchall()
+        conn.close()
+        return {r["bond_code"] for r in rows}
+    except Exception:
+        return set()
+
+
 # ============ 市场概览（中位数 / 均价 / 存量 / 新发 / 退市比例） ============
 
 def _is_eb(code, name=None):
