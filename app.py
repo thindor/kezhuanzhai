@@ -991,9 +991,24 @@ def admin_logout():
 def admin():
     if not is_admin():
         return redirect(url_for("admin_login"))
-    bonds = list_bonds()
-    market = list_market_bonds()
-    return render_template("admin.html", bonds=bonds, market=market, site=get_site_settings())
+    # 首页只渲染轻量的设置面板；已收录/全市场两大列表改为点菜单才懒加载（见 /admin/api/bonds、/admin/api/market）
+    return render_template("admin.html", site=get_site_settings())
+
+
+@app.route("/admin/api/bonds")
+def admin_api_bonds():
+    """已收录转债（已抓取持有人）列表，按需加载，避免后台首页一次性拉全量拖慢。"""
+    if not is_admin():
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    return jsonify(list_bonds())
+
+
+@app.route("/admin/api/market")
+def admin_api_market():
+    """市场全部可转债列表，按需加载。"""
+    if not is_admin():
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    return jsonify(list_market_bonds())
 
 
 @app.route("/admin/collect-logs")

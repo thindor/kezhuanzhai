@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>管理后台 - {{ site_name }}</title>
-<link rel="stylesheet" href="/static/style.css?v=8">
+<link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
 <div class="container">
@@ -15,6 +15,13 @@
       <a class="link" href="/admin/logout">退出登录</a>
     </span>
   </header>
+
+  <nav class="admin-nav">
+    <button class="tab-btn active" data-tab="settings" onclick="showTab('settings')">设置</button>
+    <button class="tab-btn" data-tab="collected" onclick="showTab('collected')">已收录转债</button>
+    <button class="tab-btn" data-tab="market" onclick="showTab('market')">市场全部可转债</button>
+  </nav>
+
   <div class="freshness"><span class="dot"></span>数据截至 <b>{{ data_as_of }}</b> · 每日 16:30 收盘后自动更新（盘中实时价请点对应刷新按钮）</div>
 
   <div class="admin-opt">
@@ -24,123 +31,165 @@
     </label>
   </div>
 
-  <!-- 站点设置 -->
-  <div class="panel">
-    <div class="panel-head">
-      <h2>站点设置</h2>
-      <span class="hint">网站名称 / 域名 / Logo，保存后全站即时生效</span>
-    </div>
-    <div class="site-settings">
-      <div class="field">
-        <label>网站名称</label>
-        <input id="siteName" value="{{ site.site_name }}">
+  <!-- 设置（默认显示） -->
+  <section id="tab-settings" class="tab-pane active">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>站点设置</h2>
+        <span class="hint">网站名称 / 域名 / Logo，保存后全站即时生效</span>
       </div>
-      <div class="field">
-        <label>站点域名</label>
-        <input id="siteDomain" placeholder="如 kzz.bukui.fun" value="{{ site.site_domain }}">
-      </div>
-      <div class="field">
-        <label>Logo 图片</label>
-        <div class="logo-row">
-          <img id="logoPreview" class="logo-preview" {% if site.site_logo %}src="{{ site.site_logo }}"{% else %}style="display:none"{% endif %}>
-          <input type="file" id="logoFile" accept="image/*" onchange="onLogoFile(event)">
-          <button class="ghost" type="button" onclick="clearLogo()">清除 Logo</button>
+      <div class="site-settings">
+        <div class="field">
+          <label>网站名称</label>
+          <input id="siteName" value="{{ site.site_name }}">
         </div>
-        <input id="logoUrl" class="logo-url" placeholder="或填写图片链接（留空则用上方上传）" value="{% if site.site_logo and not site.site_logo.startswith('data:') %}{{ site.site_logo }}{% endif %}">
-        <input type="hidden" id="siteLogo" value="{{ site.site_logo }}">
+        <div class="field">
+          <label>站点域名</label>
+          <input id="siteDomain" placeholder="如 kzz.bukui.fun" value="{{ site.site_domain }}">
+        </div>
+        <div class="field">
+          <label>Logo 图片</label>
+          <div class="logo-row">
+            <img id="logoPreview" class="logo-preview" {% if site.site_logo %}src="{{ site.site_logo }}"{% else %}style="display:none"{% endif %}>
+            <input type="file" id="logoFile" accept="image/*" onchange="onLogoFile(event)">
+            <button class="ghost" type="button" onclick="clearLogo()">清除 Logo</button>
+          </div>
+          <input id="logoUrl" class="logo-url" placeholder="或填写图片链接（留空则用上方上传）" value="{% if site.site_logo and not site.site_logo.startswith('data:') %}{{ site.site_logo }}{% endif %}">
+          <input type="hidden" id="siteLogo" value="{{ site.site_logo }}">
+        </div>
+        <div class="actions">
+          <button onclick="saveSiteSettings()">保存站点设置</button>
+          <span id="siteStatus" class="status"></span>
+        </div>
       </div>
-      <div class="actions">
-        <button onclick="saveSiteSettings()">保存站点设置</button>
-        <span id="siteStatus" class="status"></span>
+    </div>
+  </section>
+
+  <!-- 区块1：已收录转债（已抓取持有人）— 点菜单才加载 -->
+  <section id="tab-collected" class="tab-pane">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>已收录转债（已抓取持有人）</h2>
+        <span class="hint">共 <b id="cTotal">0</b> 只</span>
       </div>
-    </div>
-  </div>
-
-  <!-- 区块1：已收录转债（已抓取持有人） -->
-  <div class="panel">
-    <div class="panel-head">
-      <h2>已收录转债（已抓取持有人）</h2>
-      <span class="hint">共 <b id="cTotal">0</b> 只</span>
-    </div>
-    <div class="admin-actions">
-      <form id="addForm" onsubmit="return addBond(event)">
-        <input id="addCode" placeholder="输入转债代码（新增或更新）">
-        <button type="submit">新增 / 更新</button>
-      </form>
-      <button class="ghost" onclick="updateAll()">批量更新全部已收录</button>
-      <span id="adminStatus" class="status"></span>
-    </div>
-    <div class="page-toolbar">
-      <span class="hint">每页</span>
-      <select id="cPageSize" onchange="onCollectedPageSize(this.value)">
-        <option value="10">10</option>
-        <option value="20">20</option>
-        <option value="50" selected>50</option>
-        <option value="100">100</option>
-      </select>
-      <span class="hint">条</span>
-    </div>
-    <table class="bond-list">
-      <thead>
-        <tr>
-          <th>转债代码</th><th>名称</th><th>正股</th>
-          <th>报告期数</th><th>自然人条数</th><th>下修</th><th>最后更新</th><th>操作</th>
-        </tr>
-      </thead>
-      <tbody id="collectedBody"></tbody>
-    </table>
-    <div class="pager" id="cPager"></div>
-  </div>
-
-  <!-- 区块2：市场全部可转债（分页 + 每页条数 + 批量选择 + 批量更新） -->
-  <div class="panel">
-    <div class="panel-head">
-      <h2>市场全部可转债</h2>
-      <span class="hint">共 <b id="mTotal">0</b> 只 · 已采集 <b id="mDone">0</b> · 未采集 <b id="mTodo">0</b></span>
-    </div>
-    <div class="market-toolbar">
-      <input id="mSearch" placeholder="搜索代码 / 名称 / 正股" oninput="onSearch()">
-      <button onclick="selectPage(true)">全选本页</button>
-      <button onclick="selectMatched(true)">全选筛选结果</button>
-      <button onclick="selectMatched(false)">取消选择</button>
-      <button class="primary" id="batchBtn" disabled onclick="batchUpdate()">批量更新选中 (<span id="selNum">0</span>)</button>
-      <span id="batchStatus" class="status"></span>
-    </div>
-    <div class="page-toolbar">
-      <span class="hint">每页</span>
-      <select id="mPageSize" onchange="onMarketPageSize(this.value)">
-        <option value="10">10</option>
-        <option value="20">20</option>
-        <option value="50" selected>50</option>
-        <option value="100">100</option>
-      </select>
-      <span class="hint">条</span>
-    </div>
-    <div class="progress" id="batchProgress" style="display:none">
-      <div class="track"><div class="bar" id="batchBar"></div></div>
-      <span id="batchPct" class="pct"></span>
-    </div>
-    <div class="table-wrap">
-      <table class="bond-list market-list">
+      <div class="admin-actions">
+        <form id="addForm" onsubmit="return addBond(event)">
+          <input id="addCode" placeholder="输入转债代码（新增或更新）">
+          <button type="submit">新增 / 更新</button>
+        </form>
+        <button class="ghost" onclick="updateAll()">批量更新全部已收录</button>
+        <span id="adminStatus" class="status"></span>
+      </div>
+      <div class="page-toolbar">
+        <span class="hint">每页</span>
+        <select id="cPageSize" onchange="onCollectedPageSize(this.value)">
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+        </select>
+        <span class="hint">条</span>
+      </div>
+      <table class="bond-list">
         <thead>
           <tr>
-            <th style="width:36px"><input type="checkbox" id="checkAll" onclick="selectPage(this.checked)"></th>
-            <th>代码</th><th>名称</th><th>正股</th><th>评级</th><th>下修</th><th>现价</th><th>状态</th><th>操作</th>
+            <th>转债代码</th><th>名称</th><th>正股</th>
+            <th>报告期数</th><th>自然人条数</th><th>下修</th><th>最后更新</th><th>操作</th>
           </tr>
         </thead>
-        <tbody id="marketBody"></tbody>
+        <tbody id="collectedBody"><tr><td colspan="8" style="text-align:center;color:#888">点击上方「已收录转债」菜单加载</td></tr></tbody>
       </table>
+      <div class="pager" id="cPager"></div>
     </div>
-    <div class="pager" id="mPager"></div>
-  </div>
+  </section>
+
+  <!-- 区块2：市场全部可转债（分页 + 每页条数 + 批量选择 + 批量更新）— 点菜单才加载 -->
+  <section id="tab-market" class="tab-pane">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>市场全部可转债</h2>
+        <span class="hint">共 <b id="mTotal">0</b> 只 · 已采集 <b id="mDone">0</b> · 未采集 <b id="mTodo">0</b></span>
+      </div>
+      <div class="market-toolbar">
+        <input id="mSearch" placeholder="搜索代码 / 名称 / 正股" oninput="onSearch()">
+        <button onclick="selectPage(true)">全选本页</button>
+        <button onclick="selectMatched(true)">全选筛选结果</button>
+        <button onclick="selectMatched(false)">取消选择</button>
+        <button class="primary" id="batchBtn" disabled onclick="batchUpdate()">批量更新选中 (<span id="selNum">0</span>)</button>
+        <span id="batchStatus" class="status"></span>
+      </div>
+      <div class="page-toolbar">
+        <span class="hint">每页</span>
+        <select id="mPageSize" onchange="onMarketPageSize(this.value)">
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+        </select>
+        <span class="hint">条</span>
+      </div>
+      <div class="progress" id="batchProgress" style="display:none">
+        <div class="track"><div class="bar" id="batchBar"></div></div>
+        <span id="batchPct" class="pct"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="bond-list market-list">
+          <thead>
+            <tr>
+              <th style="width:36px"><input type="checkbox" id="checkAll" onclick="selectPage(this.checked)"></th>
+              <th>代码</th><th>名称</th><th>正股</th><th>评级</th><th>下修</th><th>现价</th><th>状态</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="marketBody"><tr><td colspan="9" style="text-align:center;color:#888">点击上方「市场全部可转债」菜单加载</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pager" id="mPager"></div>
+    </div>
+  </section>
 </div>
 
 <script>
-const MARKET = {{ market|tojson }};
-const COLLECTED = {{ bonds|tojson }};
+let MARKET = [];
+let COLLECTED = [];
 const selSet = new Set();
 let marketPage = 1, marketPageSize = 50;
 let collectedPage = 1, collectedPageSize = 50;
+let loadedCollected = false, loadedMarket = false;
+
+function showTab(name){
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  const sec = document.getElementById('tab-' + name);
+  if(sec) sec.classList.add('active');
+  document.querySelectorAll('.admin-nav .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  if(name === 'collected' && !loadedCollected) fetchCollected();
+  if(name === 'market' && !loadedMarket) fetchMarket();
+}
+async function fetchCollected(){
+  loadedCollected = true;
+  const body = document.getElementById('collectedBody');
+  body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#888">加载中…</td></tr>';
+  try{
+    const r = await fetch('/admin/api/bonds');
+    if(!r.ok) throw new Error('加载失败');
+    COLLECTED = await r.json();
+    renderCollected();
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#c33">加载失败，请刷新重试</td></tr>';
+  }
+}
+async function fetchMarket(){
+  loadedMarket = true;
+  const body = document.getElementById('marketBody');
+  body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#888">加载中…</td></tr>';
+  try{
+    const r = await fetch('/admin/api/market');
+    if(!r.ok) throw new Error('加载失败');
+    MARKET = await r.json();
+    renderMarket();
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#c33">加载失败，请刷新重试</td></tr>';
+  }
+}
 
 function buildPager(total, totalPages, curPage, gotoName){
   if(totalPages <= 1) return '<span class="pager-info">共 ' + total + ' 只</span>';
@@ -295,7 +344,7 @@ async function updateOneMarket(code){
     if(d.ok){ markDone(code); setBatch('更新成功：' + code); }
     else setBatch('失败：' + code + ' ' + (d.message || ''));
   }catch(e){ setBatch('失败：' + code + ' ' + e); }
-  renderMarket();
+  loadedMarket = false; fetchMarket();
 }
 
 function ignoreDelisted(){
@@ -303,7 +352,6 @@ function ignoreDelisted(){
   return el ? el.checked : true;
 }
 async function batchUpdate(){
-  // 若勾选「忽略已退市」，则批量更新时排除退市债；否则全部纳入（退市且已有数据的仍会被后端冻结跳过）
   const codes = [...selSet].filter(c => {
     if(!ignoreDelisted()) return true;
     const m = MARKET.find(x => x.bond_code === c);
@@ -338,7 +386,7 @@ async function batchUpdate(){
   await Promise.all(ws);
   prog.style.display = 'none';
   setBatch('批量更新完成：成功 ' + (codes.length - fail) + ' · 失败 ' + fail + '（共 ' + codes.length + ' 只）');
-  renderMarket();
+  loadedMarket = false; fetchMarket();
 }
 
 async function addBond(e){
@@ -350,7 +398,7 @@ async function addBond(e){
   const r = await fetch('/admin/add', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body});
   const d = await r.json();
   setStatus(d.ok ? ('成功：' + (d.message||'')) : ('失败：' + (d.message||'')));
-  if(d.ok) setTimeout(()=>location.reload(), 800);
+  if(d.ok) setTimeout(()=>{ loadedCollected = false; fetchCollected(); }, 800);
   return false;
 }
 async function updateOne(code){
@@ -358,7 +406,7 @@ async function updateOne(code){
   const r = await fetch('/admin/update/' + code, {method:'POST'});
   const d = await r.json();
   setStatus(d.ok ? ('更新成功：' + (d.message||'')) : ('更新失败：' + (d.message||'')));
-  if(d.ok) setTimeout(()=>location.reload(), 800);
+  if(d.ok) setTimeout(()=>{ loadedCollected = false; fetchCollected(); }, 800);
 }
 async function updateAll(){
   if(!confirm('确认批量更新全部已收录转债？（会逐个重新爬取）')) return;
@@ -366,11 +414,12 @@ async function updateAll(){
   const r = await fetch('/admin/update_all?ignore_delisted=' + (ignoreDelisted()?1:0), {method:'POST'});
   const d = await r.json();
   setStatus('批量更新完成：共 ' + d.total + ' 只');
+  loadedCollected = false; fetchCollected();
 }
 async function delOne(code){
   if(!confirm('确认删除 ' + code + ' 及其持有人数据？')) return;
   await fetch('/admin/delete/' + code, {method:'POST'});
-  location.reload();
+  loadedCollected = false; fetchCollected();
 }
 function setStatus(s){ document.getElementById('adminStatus').textContent = s; }
 function setBatch(s){ document.getElementById('batchStatus').textContent = s; }
@@ -419,9 +468,6 @@ async function saveSiteSettings(){
     document.getElementById('siteStatus').textContent = d.ok ? '保存成功，全站已更新' : ('失败：' + (d.message || ''));
   }catch(e){ document.getElementById('siteStatus').textContent = '保存失败：' + e; }
 }
-
-renderMarket();
-renderCollected();
 </script>
 </body>
 </html>
