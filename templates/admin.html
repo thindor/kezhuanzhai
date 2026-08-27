@@ -11,16 +11,13 @@
   <header class="topbar">
     <h1>管理后台</h1>
     <span class="nav-links">
+      <button class="link tab-btn active" data-tab="settings" onclick="showTab('settings')">设置</button>
+      <button class="link tab-btn" data-tab="collected" onclick="showTab('collected')">已收录转债</button>
+      <button class="link tab-btn" data-tab="market" onclick="showTab('market')">市场全部可转债</button>
       <a class="link" href="/admin/collect-logs">采集日志</a>
       <a class="link" href="/admin/logout">退出登录</a>
     </span>
   </header>
-
-  <nav class="admin-nav">
-    <button class="tab-btn active" data-tab="settings" onclick="showTab('settings')">设置</button>
-    <button class="tab-btn" data-tab="collected" onclick="showTab('collected')">已收录转债</button>
-    <button class="tab-btn" data-tab="market" onclick="showTab('market')">市场全部可转债</button>
-  </nav>
 
   <div class="freshness"><span class="dot"></span>数据截至 <b>{{ data_as_of }}</b> · 每日 16:30 收盘后自动更新（盘中实时价请点对应刷新按钮）</div>
 
@@ -160,7 +157,7 @@ function showTab(name){
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   const sec = document.getElementById('tab-' + name);
   if(sec) sec.classList.add('active');
-  document.querySelectorAll('.admin-nav .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.topbar .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   if(name === 'collected' && !loadedCollected) fetchCollected();
   if(name === 'market' && !loadedMarket) fetchMarket();
 }
