@@ -1565,8 +1565,22 @@ def compute_equal_weight_index(min_sample=50, base_value=1000.0):
     base_date = min(day_stat.keys())
     base_avg = day_stat[base_date][0]
     now = _now_str()
+    import datetime as _dtmod
+    _latest_td = max(day_stat.keys()) if day_stat else None
+    _today = _dtmod.date.today().strftime('%Y-%m-%d')
+    _now_hm = _dtmod.datetime.now().strftime('%H:%M')
+    # 盘中（<16:00）手动采集到的「今日」为实时价、样本常不完整，不计入指数，
+    # 待收盘后(>=16:00)每日任务重算再写入；避免盘中快照污染涨跌幅。
+    _is_intraday = (_latest_td == _today and _now_hm < '16:00')
+    # 防御：最新交易日若样本数显著低于近期均值，视为「盘中/不完整采集」，
+    # 跳过写入当日（不 REPLACE），保留上一完整交易日为指数最新日，避免半截
+    # 数据污染涨跌幅；补齐后再次重算即可正常写入。
+    _recent = [v[2] for k, v in day_stat.items() if k != _latest_td]
+    _recent_avg = (sum(_recent) / len(_recent)) if _recent else 0.0
     for td in sorted(day_stat.keys()):
         avg_p, med_p, n = day_stat[td]
+        if td == _latest_td and (_is_intraday or (_recent_avg and (n < 200 or n < _recent_avg * 0.7))):
+            continue
         idx_val = round(avg_p / base_avg * base_value, 2) if base_avg else None
         cur.execute(
             "INSERT OR REPLACE INTO equal_weight_index"
