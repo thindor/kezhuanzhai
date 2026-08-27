@@ -315,6 +315,49 @@ def refresh_redeem_prices():
     return n
 
 
+def refresh_transfer_prices(progress_every=50):
+    """用 akshare.bond_zh_cov_info 取每只转债的「当前转股价」回写 bonds.current_transfer_price。
+
+    背景：东财 RPT_BOND_CB_LIST 的 TRANSFER_PRICE 字段对很多债返回 None，过去 seed_bonds
+    兜底逻辑会回退到 INITIAL_TRANSFER_PRICE（发行价），导致经过多次下修/分红的债
+    current_transfer_price 严重失真（例如康泰转2 写入 145.63 而真实为 15.69）。
+
+    本函数逐只查 akshare 接口取真实 TRANSFER_PRICE，写库。返回成功写入条数；接口失败
+    或无值则跳过该只（保留库内原值）。"""
+    try:
+        import akshare as ak
+    except ImportError:
+        return 0
+    conn = get_conn()
+    cur = conn.cursor()
+    rows = list(cur.execute("SELECT bond_code FROM bonds WHERE is_delisted IS NULL OR is_delisted=0"))
+    conn.close()
+    n = 0
+    for i, (code,) in enumerate(rows, 1):
+        try:
+            df = ak.bond_zh_cov_info(symbol=code)
+        except Exception:
+            continue
+        if df is None or df.empty:
+            continue
+        tp = df.iloc[0].get("TRANSFER_PRICE")
+        try:
+            tp = float(tp) if tp is not None else None
+        except (TypeError, ValueError):
+            tp = None
+        if tp is None or tp <= 0:
+            continue
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("UPDATE bonds SET current_transfer_price=? WHERE bond_code=?", (tp, code))
+        conn.commit()
+        conn.close()
+        n += 1
+        if progress_every and i % progress_every == 0:
+            print(f"  [refresh_transfer_prices] {i}/{len(rows)} 已写 {n}")
+    return n
+
+
 def _qx(code):
     """通用行情前缀：沪市(6/9/11/5/7)->sh，深市(0/2/3/12)->sz。"""
     c = (code or "").strip()

@@ -104,7 +104,7 @@ def main():
                 "issue_scale": _to_float(d.get("ACTUAL_ISSUE_SCALE")),
                 "listing_date": _to_date(d.get("LISTING_DATE")),
                 "expire_date": _to_date(d.get("EXPIRE_DATE")),
-                "current_transfer_price": _to_float(d.get("TRANSFER_PRICE") or d.get("TRANSFER_VALUE") or d.get("INITIAL_TRANSFER_PRICE")) or existing_tp.get(code),
+                "current_transfer_price": _to_float(d.get("TRANSFER_PRICE")) or existing_tp.get(code),
                 "current_price": price if price is not None else existing_price.get(code),
                 "data_source": "eastmoney_RPT_BOND_CB_LIST",
                 "created_at": now,
