@@ -452,6 +452,12 @@ function clearLogo(){
   document.getElementById('logoUrl').value = '';
   document.getElementById('logoPreview').style.display = 'none';
 }
+/* ---------- 锚点自动切换 tab（从采集日志页跳回 /admin#collected 等） ---------- */
+window.addEventListener('DOMContentLoaded', () => {
+  const h = (location.hash || '').replace('#', '');
+  if(h === 'settings' || h === 'collected' || h === 'market') showTab(h);
+});
+
 async function saveSiteSettings(){
   let logo = (document.getElementById('siteLogo').value || '').trim();
   const url = (document.getElementById('logoUrl').value || '').trim();
