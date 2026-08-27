@@ -1,5 +1,7 @@
 """本地 SQLite 存储层：转债基础信息 + 各报告期十大持有人。"""
+import datetime
 import sqlite3
+import uuid
 from config import DB_PATH
 
 
@@ -148,6 +150,31 @@ def init_db():
         site_domain TEXT,
         site_logo   TEXT
     )""")
+    # 每日采集运行日志（管理后台排错用：每次自动/手动采集记一条 run + 逐步 step）
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS collect_runs (
+        run_id      TEXT PRIMARY KEY,
+        trigger     TEXT,
+        started_at  TEXT,
+        finished_at TEXT,
+        status      TEXT,
+        duration_sec REAL,
+        notes       TEXT
+    )""")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS collect_steps (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      TEXT NOT NULL,
+        step_no     INTEGER,
+        step_name   TEXT,
+        status      TEXT,
+        started_at  TEXT,
+        finished_at TEXT,
+        duration_sec REAL,
+        message     TEXT,
+        error_text  TEXT
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_collect_steps_run ON collect_steps(run_id)")
     conn.commit()
     conn.close()
     # 启动即按到期日/摘牌日幂等回填退市标记（覆盖存量债券）
@@ -155,6 +182,101 @@ def init_db():
         backfill_delist_status()
     except Exception:
         pass
+
+
+# ---------------- 每日采集运行日志（结构化为管理后台排错） ----------------
+def _now():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def start_collect_run(trigger="scheduler"):
+    """开始一次采集运行，返回 run_id（供各步骤关联）。"""
+    run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO collect_runs(run_id, trigger, started_at, status) VALUES(?,?,?,'running')",
+                (run_id, trigger, _now()))
+    conn.commit()
+    conn.close()
+    return run_id
+
+
+def finish_collect_run(run_id, status, notes=""):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE collect_runs SET finished_at=?, status=?, notes=?,
+               duration_sec = ROUND((julianday(?) - julianday(started_at)) * 86400, 1)
+           WHERE run_id=?""",
+        (_now(), status, notes, _now(), run_id))
+    conn.commit()
+    conn.close()
+
+
+def begin_collect_step(run_id, step_no, step_name):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO collect_steps(run_id, step_no, step_name, status, started_at) VALUES(?,?,?,'running',?)",
+        (run_id, step_no, step_name, _now()))
+    conn.commit()
+    conn.close()
+
+
+def finish_collect_step(run_id, step_no, step_name, status, message="", error_text="", duration=None):
+    conn = get_conn()
+    cur = conn.cursor()
+    dur = None if duration is None else round(float(duration), 1)
+    now = _now()
+    # 更新 begin 时写入的同一步行（保留 started_at）；失败仍记录错误原文便于排错
+    cur.execute(
+        """UPDATE collect_steps SET status=?, finished_at=?, duration_sec=?, message=?, error_text=?
+           WHERE run_id=? AND step_no=?""",
+        (status, now, dur, message, error_text, run_id, step_no))
+    if cur.rowcount == 0:
+        # begin 未写入（异常路径）时直接插入
+        cur.execute(
+            """INSERT INTO collect_steps(run_id, step_no, step_name, status, started_at, finished_at, duration_sec, message, error_text)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (run_id, step_no, step_name, status, now, now, dur, message, error_text))
+    conn.commit()
+    conn.close()
+
+
+def get_collect_runs(limit=50):
+    conn = get_conn()
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT * FROM collect_runs ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_collect_steps(run_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT * FROM collect_steps WHERE run_id=? ORDER BY step_no", (run_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_running_collect_run(recent_minutes=180):
+    """返回最近仍在 running 的 run_id（用于防止管理员并发触发采集）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT run_id, started_at FROM collect_runs WHERE status='running'").fetchall()
+    conn.close()
+    now = datetime.datetime.now()
+    for r in rows:
+        try:
+            st = datetime.datetime.strptime(r["started_at"], "%Y-%m-%d %H:%M:%S")
+            if (now - st).total_seconds() <= recent_minutes * 60:
+                return r["run_id"]
+        except Exception:
+            pass
+    return None
 
 
 # ---------------- 站点设置（名称 / 域名 / logo） ----------------

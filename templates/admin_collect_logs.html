@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>采集日志 - 管理后台</title>
+<link rel="stylesheet" href="/static/style.css?v=8">
+</head>
+<body>
+<div class="container">
+  <header class="topbar">
+    <h1>采集日志</h1>
+    <span class="nav-links">
+      <a class="link" href="/admin">管理后台</a>
+      <a class="link" href="/admin/logout">退出登录</a>
+    </span>
+  </header>
+
+  <div class="freshness">
+    <span class="dot"></span>每次自动 / 手动采集都会在此记录每步成败与错误原文，便于线上排错。
+  </div>
+
+  <!-- 操作区 -->
+  <div class="panel">
+    <div class="panel-head">
+      <h2>运行采集</h2>
+      <span class="hint">每个交易日 16:35 由服务器定时自动采集（非交易日自动跳过）</span>
+    </div>
+    <div class="actions">
+      <button id="runBtn" onclick="runCollect()">立即采集（强制）</button>
+      <button class="ghost" onclick="location.reload()">刷新</button>
+      <span id="runStatus" class="status"></span>
+    </div>
+    {% if running %}
+    <div class="run-tip">⏳ 当前有采集任务进行中，页面每 5 秒自动刷新……</div>
+    {% endif %}
+  </div>
+
+  <!-- 运行列表 -->
+  <div class="panel">
+    <div class="panel-head">
+      <h2>采集运行记录</h2>
+      <span class="hint">共 {{ runs|length }} 条（最近 50 次）</span>
+    </div>
+    <table class="tbl collect-runs">
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>触发</th>
+          <th>开始时间</th>
+          <th>结束时间</th>
+          <th>耗时(秒)</th>
+          <th>备注</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in runs %}
+        <tr class="{% if r.run_id == selected_run %}sel{% endif %}">
+          <td><span class="badge badge-{{ r.status }}">{{ r.status }}</span></td>
+          <td>{{ r.trigger }}</td>
+          <td>{{ r.started_at or '' }}</td>
+          <td>{{ r.finished_at or '' }}</td>
+          <td>{{ '%.1f'|format(r.duration_sec) if r.duration_sec is not none else '—' }}</td>
+          <td class="notes">{{ r.notes or '' }}</td>
+          <td><a class="link" href="?run={{ r.run_id }}">详情</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">暂无采集记录</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 步骤明细 -->
+  {% if selected_run %}
+  <div class="panel">
+    <div class="panel-head">
+      <h2>步骤明细 · {{ selected_run }}</h2>
+      <span class="hint">逐步成败与错误原文</span>
+    </div>
+    <table class="tbl collect-steps">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>步骤</th>
+          <th>状态</th>
+          <th>耗时(秒)</th>
+          <th>信息</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in steps %}
+        <tr class="{% if s.status == 'failed' %}err-row{% endif %}">
+          <td>{{ s.step_no }}</td>
+          <td>{{ s.step_name }}</td>
+          <td><span class="badge badge-{{ s.status }}">{{ s.status }}</span></td>
+          <td>{{ '%.1f'|format(s.duration_sec) if s.duration_sec is not none else '—' }}</td>
+          <td class="notes">{{ s.message or '' }}</td>
+        </tr>
+        {% if s.error_text %}
+        <tr class="err-detail">
+          <td colspan="5">
+            <div class="err-label">错误原文（用于排错）：</div>
+            <pre>{{ s.error_text }}</pre>
+          </td>
+        </tr>
+        {% endif %}
+        {% else %}
+        <tr><td colspan="5" class="empty">该运行暂无步骤记录</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+function runCollect() {
+  const btn = document.getElementById('runBtn');
+  const st = document.getElementById('runStatus');
+  btn.disabled = true; st.textContent = '启动中…';
+  fetch('/admin/collect/run', {method:'POST'})
+    .then(r => r.json())
+    .then(d => {
+      st.textContent = d.message || (d.ok ? '已启动' : '失败');
+      if (d.ok) setTimeout(() => location.reload(), 1500);
+      else btn.disabled = false;
+    })
+    .catch(e => { st.textContent = '请求失败：' + e; btn.disabled = false; });
+}
+{% if running %}
+setTimeout(() => location.reload(), 5000);
+{% endif %}
+</script>
+</body>
+</html>

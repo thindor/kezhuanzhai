@@ -72,15 +72,18 @@ def backfill_current_price():
 def main():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT bond_code, current_price, current_transfer_price FROM bonds")
-    existing_price = {r[0]: r[1] for r in cur.fetchall()}
-    existing_tp = {r[0]: r[2] for r in cur.fetchall()}
+    cur.execute("SELECT bond_code, current_price, current_transfer_price, is_delisted FROM bonds")
+    rows = cur.fetchall()
     conn.close()
+    existing_price = {r[0]: r[1] for r in rows}
+    existing_tp = {r[0]: r[2] for r in rows}
+    existing_delisted = {r[0]: (r[3] or 0) for r in rows}
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     total = 0
     with_price = 0
     listed = 0
+    frozen = 0
 
     pages, _ = fetch_page(1)
     print(f"总页数: {pages}")
@@ -93,6 +96,12 @@ def main():
         for d in data:
             code = d.get("SECURITY_CODE")
             if not code:
+                continue
+            # 已退市债冻结：库内已标记退市的券不再回写基础数据（行情/持有人冻结见 crawler / admin），
+            # 避免对死券的无效请求，也防止源数据抖动污染历史。新退市仍会被 startup 的
+            # backfill_delist_status 与首次出现的源数据标记捕获。
+            if existing_delisted.get(code):
+                frozen += 1
                 continue
             price = _to_float(d.get("CURRENT_BOND_PRICE"))
             bond = {
@@ -119,12 +128,12 @@ def main():
                 with_price += 1
             if bond["listing_date"]:
                 listed += 1
-        print(f"第 {pn}/{pages} 页完成：本页 +{len(data)}，累计 {total}（含现价 {with_price}）")
+        print(f"第 {pn}/{pages} 页完成：本页 +{len(data)}，累计 {total}（含现价 {with_price}，冻结退市 {frozen}）")
         if pn < pages:
             time.sleep(1.5)  # 慢慢爬，降低限流风险
 
     backfilled = backfill_current_price()
-    print(f"DONE 入库 {total} 只，其中含现价 {with_price} 只，有上市日 {listed} 只，回写现价 {backfilled} 只")
+    print(f"DONE 入库 {total} 只，其中含现价 {with_price} 只，有上市日 {listed} 只，冻结退市 {frozen} 只，回写现价 {backfilled} 只")
 
 
 if __name__ == "__main__":

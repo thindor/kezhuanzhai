@@ -19,11 +19,15 @@ from flask import (Flask, request, render_template, session, redirect,
 from markupsafe import Markup
 import re
 import os
+import sys
 import json
 import time
 import threading
+import subprocess
 import urllib.parse
 from datetime import datetime
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from config import ADMIN_USER, ADMIN_PASS, SECRET_KEY, CACHE_TTL_DAYS
 from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, list_bonds,
@@ -42,7 +46,8 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 get_double_low_holds,
                 compute_market_overview, get_price_trend, get_new_bonds,
                 get_site_settings, save_site_settings,
-                get_latest_data_date, get_redeemed_bond_codes)
+                get_latest_data_date, get_redeemed_bond_codes,
+                get_collect_runs, get_collect_steps, get_running_collect_run)
 import db
 import crawler
 import checkup
@@ -988,6 +993,43 @@ def admin():
     bonds = list_bonds()
     market = list_market_bonds()
     return render_template("admin.html", bonds=bonds, market=market, site=get_site_settings())
+
+
+@app.route("/admin/collect-logs")
+def admin_collect_logs():
+    """采集日志：列出每次自动/手动采集的运行，并可展开查看每步成败与错误原文。"""
+    if not is_admin():
+        return redirect(url_for("admin_login"))
+    run_id = request.args.get("run")
+    runs = get_collect_runs(limit=50)
+    steps = get_collect_steps(run_id) if run_id else []
+    running = get_running_collect_run() is not None
+    return render_template("admin_collect_logs.html",
+                           runs=runs, steps=steps, selected_run=run_id,
+                           running=running, site=get_site_settings())
+
+
+@app.route("/admin/collect/run", methods=["POST"])
+def admin_collect_run():
+    """后台立即触发一次每日采集（--force，绕过交易日守卫），日志写入 collect_runs/steps。"""
+    if not is_admin():
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    running_id = get_running_collect_run()
+    if running_id:
+        return jsonify({"ok": False, "message": "已有采集任务进行中（%s），请稍后重试" % running_id})
+    py = sys.executable
+    env = dict(os.environ)
+    env["COLLECT_TRIGGER"] = "admin"
+    log_path = os.path.join(BASE_DIR, "collect_cron.log")
+    try:
+        with open(log_path, "a", encoding="utf-8") as lf:
+            subprocess.Popen(
+                [py, "collect_daily.py", "--force", "--trigger=admin"],
+                cwd=BASE_DIR, env=env, stdout=lf, stderr=lf,
+                start_new_session=(os.name != "nt"))
+        return jsonify({"ok": True, "message": "已启动后台采集，请稍后刷新本页查看日志"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": "启动失败：" + str(e)}), 500
 
 
 @app.route("/admin/settings", methods=["GET", "POST"])

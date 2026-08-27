@@ -10,7 +10,10 @@
 <div class="container">
   <header class="topbar">
     <h1>管理后台</h1>
-    <a class="link" href="/admin/logout">退出登录</a>
+    <span class="nav-links">
+      <a class="link" href="/admin/collect-logs">采集日志</a>
+      <a class="link" href="/admin/logout">退出登录</a>
+    </span>
   </header>
   <div class="freshness"><span class="dot"></span>数据截至 <b>{{ data_as_of }}</b> · 每日 16:30 收盘后自动更新（盘中实时价请点对应刷新按钮）</div>
 
