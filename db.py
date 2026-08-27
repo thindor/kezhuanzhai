@@ -477,10 +477,16 @@ def search_bonds(code="", delisted="all", has_down="all", down_min=None,
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) " + base + where_sql, params)
     total = cur.fetchone()[0]
-    cur.execute(
-        "SELECT b.*, COALESCE(h.holder_count,0) AS holder_count, h.latest_period "
-        + base + where_sql + " ORDER BY " + order + " LIMIT ? OFFSET ?",
-        params + [page_size, (page - 1) * page_size])
+    # page_size<=0 表示取全部匹配行（调用方自行在 Python 层排序/分页）
+    if page_size and page_size > 0:
+        cur.execute(
+            "SELECT b.*, COALESCE(h.holder_count,0) AS holder_count, h.latest_period "
+            + base + where_sql + " ORDER BY " + order + " LIMIT ? OFFSET ?",
+            params + [page_size, (page - 1) * page_size])
+    else:
+        cur.execute(
+            "SELECT b.*, COALESCE(h.holder_count,0) AS holder_count, h.latest_period "
+            + base + where_sql + " ORDER BY " + order, params)
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows, total

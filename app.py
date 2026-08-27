@@ -509,23 +509,31 @@ def bonds_list():
     if has_down not in ("all", "yes", "no"):
         has_down = "all"
     sort = request.args.get("sort", "code")
-    if sort not in ("code", "down", "updated", "holder", "expire"):
+    SORT_KEYS = ("code", "price", "conv", "premium", "redeem", "scale",
+                 "expire", "down", "updated", "holder")
+    if sort not in SORT_KEYS:
         sort = "code"
+    DEFAULT_ORDER = {
+        "code": "asc", "expire": "asc", "updated": "desc",
+        "price": "desc", "conv": "desc", "premium": "desc",
+        "redeem": "desc", "scale": "desc", "down": "desc", "holder": "desc",
+    }
+    order = request.args.get("order", "")
+    if order not in ("asc", "desc"):
+        order = DEFAULT_ORDER.get(sort, "asc")
     try:
         down_min = int(request.args.get("down_min", "").strip())
     except (ValueError, TypeError):
         down_min = None
     page_size = 50
-    rows, total = search_bonds(code=code, delisted=delisted, has_down=has_down,
-                                down_min=down_min, sort=sort, page=page, page_size=page_size)
-    # 为当前页每只转债计算强赎预警（提前 >=5 交易日）
-    for b in rows:
-        b["redemption_warn"] = crawler.compute_redemption_warning(b["bond_code"])
-    # 批量补充列表页衍生字段（本地计算，不依赖联网）：
-    #  正股最新收盘价 -> 转股价值/转股溢价率；到期赎回价(已落库)；剩余规模(回退发行规模)
-    _codes = [b["bond_code"] for b in rows]
+    # 取【全部匹配】行（排序在 Python 层完成——转股价值/溢价率为衍生字段，无法下推 SQL）
+    rows_all, total = search_bonds(code=code, delisted=delisted, has_down=has_down,
+                                   down_min=down_min, sort=sort, page=1, page_size=0)
+    # 批量补充衍生字段：正股最新收盘价 -> 转股价值/转股溢价率（一次性批量查询，避免 N+1）
+    _codes = [b["bond_code"] for b in rows_all]
     _stock_close = db.get_latest_stock_closes(_codes)
-    for b in rows:
+
+    def _enrich_derived(b):
         _tp = b.get("current_transfer_price")
         try:
             _tp = float(_tp) if _tp not in (None, "") else None
@@ -547,8 +555,43 @@ def bonds_list():
                 premium = None
         b["conv_value"] = conv_value
         b["premium"] = premium
+
+    for b in rows_all:
+        _enrich_derived(b)
+
+    # 按列排序：缺失值(None) 永远排最后，与排序方向无关（先排非空，再接空值）
+    def _scale_num(b):
+        rs = b.get("remaining_scale")
+        if rs is not None and rs > 0:
+            return float(rs)
+        iss = b.get("issue_scale")
+        return float(iss) if iss is not None else None
+
+    _key_fn = {
+        "code": lambda b: b.get("bond_code"),
+        "price": lambda b: float(b["current_price"]) if b.get("current_price") is not None else None,
+        "conv": lambda b: b.get("conv_value"),
+        "premium": lambda b: b.get("premium"),
+        "redeem": lambda b: float(b["redeem_price"]) if b.get("redeem_price") else None,
+        "scale": _scale_num,
+        "expire": lambda b: b.get("expire_date"),
+        "down": lambda b: b.get("down_revise_count") or 0,
+        "updated": lambda b: b.get("updated_at"),
+        "holder": lambda b: b.get("holder_count") or 0,
+    }.get(sort)
+    _non_null = [b for b in rows_all if _key_fn(b) is not None]
+    _null = [b for b in rows_all if _key_fn(b) is None]
+    _non_null.sort(key=_key_fn, reverse=(order == "desc"))
+    rows_sorted = _non_null + _null
+
+    # 在排序后的完整序列上切片分页
+    start = (page - 1) * page_size
+    rows = rows_sorted[start:start + page_size]
+
+    # 当前页：强赎预警 + 剩余规模展示字段
+    for b in rows:
+        b["redemption_warn"] = crawler.compute_redemption_warning(b["bond_code"])
         b["redeem_price"] = b.get("redeem_price") or None
-        # 剩余规模：优先 remaining_scale；为 0/NULL 时回退发行规模并标注(≈发行)
         _rs = b.get("remaining_scale")
         if _rs is None or _rs <= 0:
             _rs = b.get("issue_scale")
@@ -557,7 +600,7 @@ def bonds_list():
             b["is_remaining"] = True
         b["remaining_scale_disp"] = _rs
     total_pages = (total + page_size - 1) // page_size
-    # 分页 URL：保留全部筛选参数，仅覆盖 page
+    # 分页 URL：保留全部筛选/排序参数，仅覆盖 page
     args = dict(request.args)
     args["page"] = page - 1
     prev_url = ("/bonds?" + urllib.parse.urlencode(args)) if page > 1 else None
@@ -566,7 +609,7 @@ def bonds_list():
     return render_template("bonds.html", rows=rows, total=total, page=page,
                            total_pages=total_pages, code=code, delisted=delisted,
                            has_down=has_down, down_min=(down_min if down_min is not None else ""),
-                           sort=sort, prev_url=prev_url, next_url=next_url)
+                           sort=sort, order=order, prev_url=prev_url, next_url=next_url)
 
 
 # 可转债公告类型展示顺序与配色

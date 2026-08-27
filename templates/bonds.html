@@ -41,31 +41,34 @@
         <option value="no" {% if has_down=='no' %}selected{% endif %}>仅看无下修</option>
       </select>
       <input type="number" name="down_min" value="{{ down_min }}" min="0" placeholder="最少下修次数">
-      <select name="sort">
-        <option value="code" {% if sort=='code' %}selected{% endif %}>排序：代码</option>
-        <option value="down" {% if sort=='down' %}selected{% endif %}>排序：下修次数↓</option>
-        <option value="updated" {% if sort=='updated' %}selected{% endif %}>排序：最近更新↓</option>
-        <option value="holder" {% if sort=='holder' %}selected{% endif %}>排序：持有人数↓</option>
-        <option value="expire" {% if sort=='expire' %}selected{% endif %}>排序：到期日↑</option>
-      </select>
       <button type="submit" class="ff-btn">筛选</button>
       <a class="ff-reset" href="/bonds">重置</a>
     </div>
   </form>
+  <p class="sort-tip">点击表头可排序（再次点击切换升/降序，缺失值排末尾）</p>
 
   <div class="table-wrap">
     {% if rows %}
+    {% macro sortth(col, label, default_order, cls='') %}
+      {% set cur = (sort == col) %}
+      {% set tgt = ('asc' if cur and order == 'desc' else ('desc' if cur and order == 'asc' else default_order)) %}
+      <th class="{{ cls }}"><a class="sort-h" href="?sort={{ col }}&amp;order={{ tgt }}&amp;code={{ code }}&amp;delisted={{ delisted }}&amp;has_down={{ has_down }}{% if down_min != '' %}&amp;down_min={{ down_min }}{% endif %}&amp;page=1">{{ label }}{% if cur %}<span class="sort-ar">{{ '▼' if order == 'desc' else '▲' }}</span>{% endif %}</a></th>
+    {% endmacro %}
     <table class="rank">
       <thead>
         <tr>
-          <th>代码</th><th>名称</th><th>正股</th><th>评级</th>
-          <th class="num">现价</th>
-          <th class="num">转股价值</th>
-          <th class="num">转股溢价率</th>
-          <th class="num">到期赎回价</th>
-          <th class="num">剩余规模</th>
-          <th>到期时间</th>
-          <th>下修</th><th>强赎预警</th><th>持有人数</th><th>退市</th>
+          {{ sortth('code', '代码', 'asc') }}
+          <th>名称</th><th>正股</th><th>评级</th>
+          {{ sortth('price', '现价', 'desc', 'num') }}
+          {{ sortth('conv', '转股价值', 'desc', 'num') }}
+          {{ sortth('premium', '转股溢价率', 'desc', 'num') }}
+          {{ sortth('redeem', '到期赎回价', 'desc', 'num') }}
+          {{ sortth('scale', '剩余规模', 'desc', 'num') }}
+          {{ sortth('expire', '到期时间', 'asc') }}
+          {{ sortth('down', '下修', 'desc') }}
+          <th>强赎预警</th>
+          {{ sortth('holder', '持有人数', 'desc') }}
+          <th>退市</th>
         </tr>
       </thead>
       <tbody>

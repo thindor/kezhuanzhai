@@ -150,6 +150,12 @@ table.rank th, table.rank td { padding:13px 14px; text-align:left; font-size:14.
 table.rank th { background:#f7f9fc; color:#5b6472; font-weight:600; font-size:13px; white-space:nowrap; }
 table.rank tbody tr:last-child td { border-bottom:none; }
 table.rank tbody tr:hover { background:#fafbff; }
+/* 可点击排序表头 */
+a.sort-h { color:inherit; text-decoration:none; cursor:pointer; display:inline-block; user-select:none; }
+a.sort-h:hover { color:#2b6cff; }
+th.num a.sort-h { display:block; text-align:right; }
+.sort-ar { font-size:11px; margin-left:3px; color:#d4263a; font-weight:700; }
+.sort-tip { color:#8a94a6; font-size:12.5px; margin:-2px 0 8px; }
 table.rank th.num, table.rank td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .approx { display:inline-block; margin-left:4px; padding:1px 6px; border-radius:8px; background:#f1f3f5; color:#868e96; font-size:11px; font-weight:600; white-space:nowrap; }
 .rk { display:inline-flex; width:26px; height:26px; align-items:center; justify-content:center; border-radius:50%; background:#eef2ff; color:#2f6bff; font-weight:700; font-size:13px; }
