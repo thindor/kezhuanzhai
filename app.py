@@ -534,7 +534,7 @@ def bonds_list():
     _stock_close = db.get_latest_stock_closes(_codes)
 
     def _enrich_derived(b):
-        _tp = b.get("current_transfer_price")
+        _tp = db.effective_transfer_price(b)  # 与详情页共用单一权威有效转股价（下修后价优先）
         try:
             _tp = float(_tp) if _tp not in (None, "") else None
         except (TypeError, ValueError):
@@ -783,18 +783,9 @@ def bond_detail(code):
     # 最近一次下修提议（股东大会审议）日：records 已按最新在前
     latest_down_revise = records[0] if records else None
 
-    # 当前转股价：优先用集思录最新下修后转股价（已下修债才是真正的当前价），
-    # 无下修记录时回退东方财富 current_transfer_price
-    eff_tp = None
-    if latest_down_revise and latest_down_revise.get("price_after") is not None:
-        eff_tp = latest_down_revise.get("price_after")
-    if eff_tp is None:
-        eff_tp = bond.get("current_transfer_price")
-    # 兜底强转浮点（DB 该列为 TEXT 亲和，取出可能是字符串）
-    try:
-        eff_tp = float(eff_tp)
-    except (TypeError, ValueError):
-        eff_tp = None
+    # 当前转股价：与列表页共用单一权威函数 effective_transfer_price（下修后最新价优先，
+    # 无下修回退 bonds.current_transfer_price），确保详情页与列表页口径永远一致
+    eff_tp = db.effective_transfer_price(bond)
 
     # ---- 已公告强赎：取该债 announce_type='强赎' 的最新一条公告 ----
     redeem_ann = None

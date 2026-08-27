@@ -284,6 +284,71 @@ def backfill_transfer_prices():
     return n
 
 
+def _down_revise_price_after(dj):
+    """从 down_revise_json 取【最新一条】的下修后转股价（price_after）。
+
+    返回 float 或 None。下修记录按 meeting_date 降序存储，取第一条非空 price_after 即
+    当前生效转股价（所有历史记录均已生效）。无下修/无价则返 None。"""
+    if not dj:
+        return None
+    import json as _json
+    try:
+        recs = _json.loads(dj) if isinstance(dj, str) else dj
+    except Exception:
+        return None
+    if not recs:
+        return None
+    pa = recs[0].get("price_after")
+    if pa is None:
+        return None
+    try:
+        return float(pa)
+    except (TypeError, ValueError):
+        return None
+
+
+def effective_transfer_price(bond):
+    """单一权威『有效转股价』：有下修记录时以下修后最新价为准，否则用 bonds.current_transfer_price。
+
+    详情页与列表页共用此函数，确保两处转股价值/转股溢价率口径完全一致、永不漂移。
+    bond 需含 current_transfer_price 与 down_revise_json 字段。"""
+    dj = bond.get("down_revise_json") if isinstance(bond, dict) else None
+    pa = _down_revise_price_after(dj)
+    if pa is not None:
+        return pa
+    tp = bond.get("current_transfer_price") if isinstance(bond, dict) else None
+    try:
+        return float(tp) if tp not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def reconcile_transfer_prices():
+    """一次性/可复用：将 bonds.current_transfer_price 全量对齐为 effective_transfer_price。
+
+    修复『有下修记录的转债，列表页转股价/转股价值与详情页不一致』问题（过去 akshare 回填
+    覆盖了下修后价）。返回更新的行数。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT bond_code, current_transfer_price, down_revise_json FROM bonds").fetchall()
+    n = 0
+    for code, cur_tp, dj in rows:
+        eff = effective_transfer_price({"current_transfer_price": cur_tp, "down_revise_json": dj})
+        if eff is None:
+            continue
+        try:
+            cur_f = float(cur_tp) if cur_tp not in (None, "") else None
+        except (TypeError, ValueError):
+            cur_f = None
+        if cur_f is None or abs(cur_f - eff) > 1e-6:
+            cur.execute("UPDATE bonds SET current_transfer_price=? WHERE bond_code=?", (eff, code))
+            n += 1
+    conn.commit()
+    conn.close()
+    return n
+
+
 def delete_holders(bond_code):
     conn = get_conn()
     cur = conn.cursor()
@@ -807,6 +872,11 @@ def save_down_revise(bond_code, count, records):
             down_revise_updated_at = ?
         WHERE bond_code = ?
     """, (count, _json.dumps(records, ensure_ascii=False), _now_str(), bond_code))
+    # 同步『有效转股价』列：以最新下修后价为当前转股价，保证列表页/排序与详情页口径一致
+    eff = _down_revise_price_after(_json.dumps(records, ensure_ascii=False))
+    if eff is not None:
+        cur.execute("UPDATE bonds SET current_transfer_price=? WHERE bond_code=?",
+                    (eff, bond_code))
     if cur.rowcount == 0:
         # 转债尚不在 bonds 表（理论不会发生，seed 已全量），先插入空壳
         cur.execute("""

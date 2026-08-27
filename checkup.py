@@ -22,7 +22,8 @@ import requests
 from datetime import datetime, date
 
 from db import (get_bond, get_periods_info, get_holders, get_down_revise,
-               get_bond_announcements, get_conn)
+               get_bond_announcements, get_conn, effective_transfer_price,
+               _down_revise_price_after)
 import crawler
 
 EM_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -316,24 +317,36 @@ def refresh_redeem_prices():
 
 
 def refresh_transfer_prices(progress_every=50):
-    """用 akshare.bond_zh_cov_info 取每只转债的「当前转股价」回写 bonds.current_transfer_price。
+    """回写 bonds.current_transfer_price = 有效转股价（与详情页 effective_transfer_price 口径一致）。
 
-    背景：东财 RPT_BOND_CB_LIST 的 TRANSFER_PRICE 字段对很多债返回 None，过去 seed_bonds
-    兜底逻辑会回退到 INITIAL_TRANSFER_PRICE（发行价），导致经过多次下修/分红的债
-    current_transfer_price 严重失真（例如康泰转2 写入 145.63 而真实为 15.69）。
-
-    本函数逐只查 akshare 接口取真实 TRANSFER_PRICE，写库。返回成功写入条数；接口失败
-    或无值则跳过该只（保留库内原值）。"""
+    关键约束：有下修记录的转债『以下修后最新价为当前价』，绝不被 akshare 覆盖
+    （否则会重新引入『列表页转股价/转股价值与详情页不一致』的偏差）；仅对无下修的转债用
+    akshare.bond_zh_cov_info 取真实当前转股价，修复东财 TRANSFER_PRICE=None 或被初始发行价
+    污染的情况。返回写入行数。"""
     try:
         import akshare as ak
     except ImportError:
         return 0
     conn = get_conn()
     cur = conn.cursor()
-    rows = list(cur.execute("SELECT bond_code FROM bonds WHERE is_delisted IS NULL OR is_delisted=0"))
-    conn.close()
+    rows = list(cur.execute(
+        "SELECT bond_code, down_revise_json, current_transfer_price "
+        "FROM bonds WHERE is_delisted IS NULL OR is_delisted=0"))
     n = 0
-    for i, (code,) in enumerate(rows, 1):
+    for i, (code, dj, cur_tp) in enumerate(rows, 1):
+        # 有下修：以下修后价为准（与详情页一致），不调 akshare
+        eff = _down_revise_price_after(dj) if dj else None
+        if eff is not None:
+            try:
+                cur_f = float(cur_tp) if cur_tp not in (None, "") else None
+            except (TypeError, ValueError):
+                cur_f = None
+            if cur_f is None or abs(cur_f - eff) > 1e-6:
+                cur.execute("UPDATE bonds SET current_transfer_price=? WHERE bond_code=?",
+                            (eff, code))
+                n += 1
+            continue
+        # 无下修：用 akshare 当前转股价
         try:
             df = ak.bond_zh_cov_info(symbol=code)
         except Exception:
@@ -347,14 +360,13 @@ def refresh_transfer_prices(progress_every=50):
             tp = None
         if tp is None or tp <= 0:
             continue
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("UPDATE bonds SET current_transfer_price=? WHERE bond_code=?", (tp, code))
-        conn.commit()
-        conn.close()
+        cur.execute("UPDATE bonds SET current_transfer_price=? WHERE bond_code=?",
+                    (tp, code))
         n += 1
         if progress_every and i % progress_every == 0:
             print(f"  [refresh_transfer_prices] {i}/{len(rows)} 已写 {n}")
+    conn.commit()
+    conn.close()
     return n
 
 
