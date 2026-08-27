@@ -59,7 +59,13 @@
       <thead>
         <tr>
           <th>代码</th><th>名称</th><th>正股</th><th>评级</th>
-          <th>现价</th><th>下修</th><th>强赎预警</th><th>持有人数</th><th>退市</th><th>最近采集期</th><th>操作</th>
+          <th class="num">现价</th>
+          <th class="num">转股价值</th>
+          <th class="num">转股溢价率</th>
+          <th class="num">到期赎回价</th>
+          <th class="num">剩余规模</th>
+          <th>到期时间</th>
+          <th>下修</th><th>强赎预警</th><th>持有人数</th><th>退市</th>
         </tr>
       </thead>
       <tbody>
@@ -69,16 +75,16 @@
           <td><a class="nm" href="/bond/{{ b.bond_code }}">{{ b.bond_name or '-' }}</a>{{ redeem_badge(b.bond_code) }}</td>
           <td>{{ b.stock_name or '-' }}</td>
           <td>{{ b.rating or '-' }}</td>
-          <td>{{ '%.2f'|format(b.current_price) if b.current_price else '-' }}</td>
+          <td class="num">{{ '%.2f'|format(b.current_price) if b.current_price else '-' }}</td>
+          <td class="num">{{ '%.2f'|format(b.conv_value) if b.conv_value is not none else '-' }}</td>
+          <td class="num">{{ ('%.2f%%'|format(b.premium)) if b.premium is not none else '-' }}</td>
+          <td class="num">{{ '%.2f'|format(b.redeem_price) if b.redeem_price else '-' }}</td>
+          <td class="num">{% if b.remaining_scale_disp %}{{ '%.2f'|format(b.remaining_scale_disp) }}亿{% if not b.is_remaining %}<span class="approx">≈发行</span>{% endif %}{% else %}-{% endif %}</td>
+          <td>{{ b.expire_date or '-' }}</td>
           <td>{% set dc = b.down_revise_count or 0 %}{% if dc > 0 %}<a class="down-badge" href="/xiuxie/{{ b.bond_code }}">{{ dc }} 次</a>{% else %}-{% endif %}</td>
           <td>{% if b.redemption_warn %}<a class="warn-badge {{ b.redemption_warn.level }}" href="/bond/{{ b.bond_code }}" title="近30交易日已有 {{ b.redemption_warn.satisfy_cnt }}/15 日正股价≥转股价130%，预计 {{ b.redemption_warn.remaining }} 个交易日内触发强赎">⚠ {{ b.redemption_warn.remaining }}日内触发</a>{% else %}-{% endif %}</td>
           <td>{{ b.holder_count }} 条</td>
           <td>{% if b.is_delisted %}<span class="delist-badge">已退市</span>{% else %}否{% endif %}</td>
-          <td>{{ b.latest_period or '-' }}</td>
-          <td class="ops">
-            <a class="link" href="/bond/{{ b.bond_code }}">详情</a>
-            {% if dc > 0 %} · <a class="link" href="/xiuxie/{{ b.bond_code }}">下修</a>{% endif %}
-          </td>
         </tr>
       {% endfor %}
       </tbody>

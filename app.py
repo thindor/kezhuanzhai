@@ -43,6 +43,7 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 compute_market_overview, get_price_trend, get_new_bonds,
                 get_site_settings, save_site_settings,
                 get_latest_data_date, get_redeemed_bond_codes)
+import db
 import crawler
 import checkup
 import mini_bond
@@ -520,6 +521,41 @@ def bonds_list():
     # 为当前页每只转债计算强赎预警（提前 >=5 交易日）
     for b in rows:
         b["redemption_warn"] = crawler.compute_redemption_warning(b["bond_code"])
+    # 批量补充列表页衍生字段（本地计算，不依赖联网）：
+    #  正股最新收盘价 -> 转股价值/转股溢价率；到期赎回价(已落库)；剩余规模(回退发行规模)
+    _codes = [b["bond_code"] for b in rows]
+    _stock_close = db.get_latest_stock_closes(_codes)
+    for b in rows:
+        _tp = b.get("current_transfer_price")
+        try:
+            _tp = float(_tp) if _tp not in (None, "") else None
+        except (TypeError, ValueError):
+            _tp = None
+        _sp = _stock_close.get(b["bond_code"])
+        _bp = b.get("current_price")
+        conv_value = None
+        if _tp and _sp is not None:
+            try:
+                conv_value = round(100.0 / float(_tp) * float(_sp), 2)
+            except (TypeError, ValueError):
+                conv_value = None
+        premium = None
+        if _bp is not None and conv_value:
+            try:
+                premium = round((float(_bp) / conv_value - 1.0) * 100.0, 2)
+            except (TypeError, ValueError):
+                premium = None
+        b["conv_value"] = conv_value
+        b["premium"] = premium
+        b["redeem_price"] = b.get("redeem_price") or None
+        # 剩余规模：优先 remaining_scale；为 0/NULL 时回退发行规模并标注(≈发行)
+        _rs = b.get("remaining_scale")
+        if _rs is None or _rs <= 0:
+            _rs = b.get("issue_scale")
+            b["is_remaining"] = False
+        else:
+            b["is_remaining"] = True
+        b["remaining_scale_disp"] = _rs
     total_pages = (total + page_size - 1) // page_size
     # 分页 URL：保留全部筛选参数，仅覆盖 page
     args = dict(request.args)

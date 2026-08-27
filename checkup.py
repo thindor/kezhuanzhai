@@ -289,6 +289,32 @@ def refresh_remaining_scales():
     return n
 
 
+def refresh_redeem_prices():
+    """东财全量基础(RPT_BOND_CB_LIST)解析的到期赎回价(元) -> bonds.redeem_price。
+
+    复用 fetch_em_cb_basics（一次双排序拉全市场，内存缓存 10min），逐只写入
+    bonds.redeem_price（仅写 >0）。覆盖约 1000 只；剩余中段(123023~123072)约 50 只
+    需按需单只补取，未覆盖则不写（保持 NULL，列表页回退 '-'）。返回写入条数；
+    异常时静默返回 0。"""
+    try:
+        em = fetch_em_cb_basics(force=True)
+    except Exception:
+        return 0
+    if not em:
+        return 0
+    conn = get_conn()
+    cur = conn.cursor()
+    n = 0
+    for bid, c in em.items():
+        rp = c.get("redeem_price")
+        if rp is not None and rp > 0:
+            cur.execute("UPDATE bonds SET redeem_price=? WHERE bond_code=?", (rp, bid))
+            n += 1
+    conn.commit()
+    conn.close()
+    return n
+
+
 def _qx(code):
     """通用行情前缀：沪市(6/9/11/5/7)->sh，深市(0/2/3/12)->sz。"""
     c = (code or "").strip()

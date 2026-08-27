@@ -27,6 +27,7 @@ def init_db():
         current_transfer_price TEXT,
         current_price        REAL,
         remaining_scale      REAL,
+        redeem_price         REAL,
         data_source          TEXT,
         created_at           TEXT,
         updated_at           TEXT
@@ -72,7 +73,7 @@ def init_db():
     # 兼容旧库：退市标记字段（is_delisted / delist_date）
     cur.execute("PRAGMA table_info(bonds)")
     bcols3 = [r[1] for r in cur.fetchall()]
-    for col, ctype in [("is_delisted", "INTEGER"), ("delist_date", "TEXT"), ("remaining_scale", "REAL")]:
+    for col, ctype in [("is_delisted", "INTEGER"), ("delist_date", "TEXT"), ("remaining_scale", "REAL"), ("redeem_price", "REAL")]:
         if col not in bcols3:
             cur.execute("ALTER TABLE bonds ADD COLUMN %s %s" % (col, ctype))
     # 最近检索/浏览的转债（首页快捷入口）
@@ -1263,6 +1264,33 @@ def _load_closes_for_codes(codes):
     for code in d:
         d[code].sort()
     return d
+
+
+def get_latest_stock_closes(codes):
+    """批量取每只转债【最新交易日】的非空正股收盘价：{bond_code: stock_close(float)}。
+
+    用于列表页批量计算转股价值/转股溢价率，避免逐行查询。仅取 stock_close>0 的有效值，
+    取 trade_date 最大者（与详情页『取 daily 最新非空正股收盘价』口径一致）。"""
+    if not codes:
+        return {}
+    conn = get_conn()
+    cur = conn.cursor()
+    ph = ",".join("?" * len(codes))
+    rows = cur.execute(
+        "SELECT bond_code, trade_date, stock_close FROM daily_close "
+        "WHERE bond_code IN (%s) AND stock_close IS NOT NULL AND stock_close > 0" % ph,
+        codes).fetchall()
+    conn.close()
+    best = {}
+    for code, td, sc in rows:
+        try:
+            sc = float(sc)
+        except (TypeError, ValueError):
+            continue
+        cur_best = best.get(code)
+        if cur_best is None or td > cur_best[0]:
+            best[code] = (td, sc)
+    return {k: v[1] for k, v in best.items()}
 
 
 def _close_on_or_before(closes, code, date):
