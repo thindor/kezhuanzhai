@@ -279,6 +279,43 @@ def get_running_collect_run(recent_minutes=180):
     return None
 
 
+def recover_stale_runs(stale_minutes=30):
+    """把因服务重启/进程被杀而永远停在 running 的采集记录标记为 interrupted。
+
+    正常一次完整采集只需几分钟；若某 running 记录已超 stale_minutes 仍无 finished_at，
+    说明进程已死（沙箱/服务重置）。不回收会：①让管理后台「立即采集」被死锁；
+    ②在排错日志里显示一条永不结束的伪运行。这里把它及其中未结束的步骤如实标记为中断。
+    返回被回收的运行条数。
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    now = datetime.datetime.now()
+    rows = cur.execute(
+        "SELECT run_id, started_at FROM collect_runs WHERE status='running'").fetchall()
+    recovered = 0
+    for r in rows:
+        try:
+            st = datetime.datetime.strptime(r["started_at"], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            continue
+        if (now - st).total_seconds() > stale_minutes * 60:
+            rid = r["run_id"]
+            cur.execute(
+                "UPDATE collect_runs SET finished_at=?, status='interrupted', "
+                "notes='采集进程被中断（可能服务重启/沙箱重置），未正常结束' WHERE run_id=?",
+                (_now(), rid))
+            cur.execute(
+                "UPDATE collect_steps SET status='failed', finished_at=?, message='步骤未正常结束', "
+                "error_text='采集进程被中断（可能服务重启/沙箱重置），该步骤未完成' "
+                "WHERE run_id=? AND status='running'",
+                (_now(), rid))
+            recovered += 1
+    if recovered:
+        conn.commit()
+    conn.close()
+    return recovered
+
+
 # ---------------- 站点设置（名称 / 域名 / logo） ----------------
 def get_site_settings():
     """返回站点设置 dict，缺失字段用默认值兜底。

@@ -47,7 +47,8 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 compute_market_overview, get_price_trend, get_new_bonds,
                 get_site_settings, save_site_settings,
                 get_latest_data_date, get_redeemed_bond_codes,
-                get_collect_runs, get_collect_steps, get_running_collect_run)
+                get_collect_runs, get_collect_steps, get_running_collect_run,
+                recover_stale_runs)
 import db
 import crawler
 import checkup
@@ -1014,6 +1015,8 @@ def admin_collect_run():
     """后台立即触发一次每日采集（--force，绕过交易日守卫），日志写入 collect_runs/steps。"""
     if not is_admin():
         return jsonify({"ok": False, "message": "未登录"}), 401
+    # 先回收可能因服务重启而中断、永远停在 running 的遗留记录，避免「立即采集」被死锁
+    recover_stale_runs()
     running_id = get_running_collect_run()
     if running_id:
         return jsonify({"ok": False, "message": "已有采集任务进行中（%s），请稍后重试" % running_id})

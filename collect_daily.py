@@ -83,6 +83,8 @@ def main():
 
     # 确保表结构存在（独立运行时不经过 app.init_db），并让 collect_runs 表可用
     db.init_db()
+    # 先回收可能因服务重启/沙箱重置而中断、永远停在 running 的遗留记录，保证日志如实、不锁「立即采集」
+    db.recover_stale_runs()
 
     # 交易日守卫：非交易日跳过（--force 可绕过，用于管理后台手动补采 / 排错）
     if not force and not _is_trading_day():
