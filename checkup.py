@@ -472,6 +472,283 @@ def _holder_summary(code):
     }
 
 
+def build_diagnosis(d):
+    """把体检卡已有字段汇总为「诊断结论」：综合评分 + 风险/机会清单 + 动作建议。
+
+    设计原则（与详情页分工）：详情页展示全量原始资料，体检卡给「30秒判断值不值得深看 +
+    该干什么」。故本函数只读 get_checkup 已算好的字段，不再新增数据源。
+
+    返回 {
+      score: 0-100, grade: 档位名, grade_desc,
+      risks: [{level, title, detail, action}],   level: high/mid/low
+      chances: [{title, detail, action}],
+      verdict: {action, reason, links:[{text,url}]}   action: 防强赎/博弈下修/双低关注/观望/规避
+    }
+    """
+    price = d.get("bond_price")
+    ytm = d.get("ytm")
+    pure_value = d.get("pure_value")
+    premium = d.get("premium")
+    rating = (d.get("rating") or "").upper()
+    year_left = d.get("year_left")
+    pb = d.get("pb")
+    upside = d.get("upside_to_redeem")
+    holder = d.get("holder") or {}
+    redeem_ann = d.get("redeem_ann")
+    rw = d.get("redeem_warn") or {}
+    vw = d.get("revise_warn") or {}
+
+    score = 0.0
+    risks = []
+    chances = []
+
+    # ---------- ① 债性安全（30分）：YTM 为主，债底为辅 ----------
+    if ytm is not None:
+        if ytm >= 3:
+            score += 30
+            chances.append({"title": "到期收益厚", "detail": "YTM %.2f%%，持有到期年化可观" % ytm,
+                            "action": "可作底仓持有，重点关注信用风险"})
+        elif ytm >= 1:
+            score += 24
+            chances.append({"title": "有一定安全垫", "detail": "YTM %.2f%%，略优于货币收益" % ytm,
+                            "action": "债底尚可，可结合条款博弈"})
+        elif ytm >= 0:
+            score += 16
+        elif ytm >= -2:
+            score += 8
+            risks.append({"level": "mid", "title": "YTM 为负",
+                          "detail": "YTM %.2f%%，现价已高于到期总收益" % ytm,
+                          "action": "无到期保底，只能靠正股上涨或条款兑现"})
+        else:
+            score += 2
+            risks.append({"level": "high", "title": "YTM 显著为负",
+                          "detail": "YTM %.2f%%，持有到期确定亏损" % ytm,
+                          "action": "不靠债底支撑，下跌无保护"})
+    elif pure_value is not None and price is not None:
+        # 无 YTM（缺票息/赎回价）时用债底位置给分
+        gap = (price / pure_value - 1) * 100 if pure_value else None
+        if gap is not None:
+            if gap <= 0:
+                score += 24
+                chances.append({"title": "折价于债底", "detail": "现价低于纯债价值 %.1f%%" % abs(gap),
+                                "action": "债底保护充分"})
+            elif gap <= 10:
+                score += 16
+            elif gap <= 25:
+                score += 8
+            else:
+                risks.append({"level": "mid", "title": "远离债底",
+                              "detail": "现价高于债底约 %.1f%%" % gap,
+                              "action": "下跌时债底难提供支撑"})
+
+    # ---------- ② 股性弹性（25分）：溢价率越低越好 ----------
+    if premium is not None:
+        if premium < 10:
+            score += 25
+            chances.append({"title": "低溢价强股性", "detail": "转股溢价率 %.2f%%，紧密跟随正股" % premium,
+                            "action": "正股上涨能直接兑现"})
+        elif premium < 30:
+            score += 18
+        elif premium < 60:
+            score += 10
+        elif premium < 100:
+            score += 4
+            risks.append({"level": "mid", "title": "溢价率偏高",
+                          "detail": "转股溢价率 %.2f%%，正股需大涨才能跟涨" % premium,
+                          "action": "除非博弈下修，否则弹性差"})
+        else:
+            risks.append({"level": "high", "title": "溢价率畸高",
+                          "detail": "转股溢价率 %.2f%%，已基本脱离正股" % premium,
+                          "action": "高价高溢价是双杀风险区"})
+
+    # ---------- ③ 条款博弈（25分）：强赎空间 / 下修潜力 / 持有人动力 ----------
+    # 已公告强赎：条款博弈归零，且是最优先风险
+    if redeem_ann:
+        risks.insert(0, {"level": "high", "title": "已公告强赎",
+                         "detail": "该转债已发布强赎公告，将按赎回价强制赎回",
+                         "action": "须于赎回登记日前卖出或转股，否则被动低价赎回"})
+    else:
+        # 强赎倒计时
+        if rw.get("satisfy_cnt") is not None:
+            cnt = rw["satisfy_cnt"]
+            rem = rw.get("remaining")
+            if rw.get("status") != "triggered" and rem is not None:
+                if rem <= 2:
+                    risks.insert(0, {"level": "high", "title": "强赎迫近",
+                                     "detail": "近30日已 %d/15 日达标，约 %d 个交易日触发强赎" % (cnt, rem),
+                                     "action": "警惕强赎后价格向转股价值收敛，及时止盈或转股"})
+                else:
+                    risks.append({"level": "low", "title": "强赎计数中",
+                                  "detail": "近30日 %d/15 日达标，距触发约 %d 个交易日" % (cnt, rem),
+                                  "action": "持有需跟踪计数"})
+                if premium is not None and premium > 15:
+                    risks.append({"level": "mid", "title": "强赎高溢价风险",
+                                  "detail": "溢价率 %.2f%% 时遭遇强赎，转债价将向转股价值回落" % premium,
+                                  "action": "强赎前高溢价会快速压缩，注意止盈"})
+        # 距强赎空间（正股还需涨多少）
+        if upside is not None:
+            if 0 < upside <= 15:
+                score += 12
+                chances.append({"title": "距强赎很近", "detail": "正股再涨 %.1f%% 即达强赎触发价" % upside,
+                                "action": "强赎预期强，促转股动力足"})
+            elif upside <= 50:
+                score += 8
+            elif upside > 100:
+                risks.append({"level": "low", "title": "距强赎遥远",
+                              "detail": "正股需涨 %.1f%% 才触发强赎" % upside,
+                              "action": "短期难靠强赎兑现"})
+        # 下修潜力
+        if vw.get("status") == "triggered":
+            score += 8
+            chances.append({"title": "已满足下修条件", "detail": "近30日 %s/15 日正股低于转股价85%%" % vw.get("satisfy_cnt"),
+                            "action": "可博弈公司下修，关注公告"})
+        elif vw.get("satisfy_cnt") is not None and vw["satisfy_cnt"] >= 10:
+            score += 5
+            chances.append({"title": "接近下修条件", "detail": "近30日 %s/15 日正股低于转股价85%%" % vw["satisfy_cnt"],
+                            "action": "若股价继续走弱，下修概率上升"})
+        if pb is not None and pb <= 1:
+            risks.append({"level": "mid", "title": "破净限制下修",
+                          "detail": "PB=%.2f≤1，下修后转股价不得低于净资产" % pb,
+                          "action": "下修空间受净资产硬约束，博弈价值打折"})
+        # 持有人促转股动力
+        if holder.get("is_controller"):
+            score += 5
+            chances.append({"title": "大股东持仓", "detail": "第一大持有人为控股股东/国资，促转股意愿通常最强",
+                            "action": "条款博弈天花板更高"})
+
+    # ---------- ④ 信用风险（20分）：评级 ----------
+    # 评级归一化：数据源常带后缀，如 "AA+sti"（sti=主体评级标识）、"AAA/稳定"、
+    # 或含空格。先取主体部分再匹配，避免 "AA+sti" 被误判为「评级异常」。
+    rating_norm = (rating or "").strip().upper()
+    for sep in ("/", " ", "（", "("):
+        if sep in rating_norm:
+            rating_norm = rating_norm.split(sep)[0].strip()
+    for suffix in ("STI", "PI", "SI"):
+        if rating_norm.endswith(suffix) and len(rating_norm) > len(suffix):
+            rating_norm = rating_norm[: -len(suffix)].strip()
+            break
+    rate_score = {"AAA": 20, "AAA-": 19, "AA+": 17, "AA": 14, "AA-": 11,
+                  "A+": 7, "A": 5, "A-": 3}
+    rs = rate_score.get(rating_norm)
+    if rs is not None:
+        score += rs
+        if rs <= 7:
+            risks.append({"level": "high", "title": "评级偏低",
+                          "detail": "信用评级 %s，违约风险不可忽视" % rating_norm,
+                          "action": "债底成立的前提是能还钱，务必排查偿债能力"})
+        elif rs <= 11:
+            risks.append({"level": "mid", "title": "评级中等偏弱",
+                          "detail": "信用评级 %s" % rating_norm,
+                          "action": "关注公司现金流"})
+    elif rating:
+        risks.append({"level": "mid", "title": "评级异常", "detail": "评级为 %s，未在常见序列中" % rating,
+                      "action": "请核对最新评级"})
+    else:
+        risks.append({"level": "low", "title": "无评级数据", "detail": "未取到信用评级",
+                      "action": "信用风险无法评估"})
+
+    # ---------- 其他风险：临期 ----------
+    if year_left is not None and year_left <= 1:
+        risks.append({"level": "low", "title": "临近到期",
+                      "detail": "剩余 %.2f 年，促转股时间压力大" % year_left,
+                      "action": "临期债要么促转股、要么还钱，波动加大"})
+    if price is not None and price < 80:
+        risks.append({"level": "mid", "title": "低价债",
+                      "detail": "现价 %.2f 元，市场或已定价信用风险" % price,
+                      "action": "低价常伴随信用担忧，勿只看债底数字"})
+
+    # ---------- 档位与动作建议 ----------
+    high_cnt = sum(1 for r in risks if r.get("level") == "high")
+    score = max(0, min(100, round(score)))
+    # 已退市：不再具备交易/博弈价值，直接锁定档位，避免给出任何操作建议
+    is_delisted = bool(d.get("is_delisted"))
+    # 临期（剩余不足 3 个月）：促转股窗口基本关闭，下修博弈价值大幅衰减
+    is_due_soon = year_left is not None and year_left <= 0.25
+    if is_delisted:
+        grade, desc = "已退市", "该转债已退市，数据冻结归档，仅供参考"
+    elif redeem_ann:
+        grade, desc = "高危", "已公告强赎，须尽快处理持仓"
+    elif high_cnt >= 2:
+        grade, desc = "高危", "存在多个高风险项，谨慎参与"
+    elif score >= 75:
+        grade, desc = "健康", "攻守结构良好，条款与债底无明显短板"
+    elif score >= 55:
+        grade, desc = "良好", "整体尚可，但有一两项需留意"
+    elif score >= 35:
+        grade, desc = "一般", "短板较明显，需明确博弈逻辑再参与"
+    else:
+        grade, desc = "偏弱", "安全垫薄且弹性差，需谨慎"
+
+    links = [{"text": "查看完整资料与走势", "url": "/bond/%s" % d.get("code")}]
+    if holder.get("top_holder"):
+        links.append({"text": "第一大持有人：%s" % holder["top_holder"],
+                      "url": "/holder/%s" % holder["top_holder"]})
+    # 已退市债不再出现在各榜单中，不引导跳转榜单，避免点了查不到
+    if not is_delisted:
+        links.append({"text": "下修预警榜", "url": "/down-revise-warnings"})
+        links.append({"text": "双低策略榜", "url": "/double-low"})
+
+    # 动作：按风险优先级从高到低判定，给出唯一明确结论
+    if is_delisted:
+        action = "已退市"
+        reason = "该转债已退市并停止交易，页面数据为归档快照，不再更新，仅供历史查询参考。"
+    elif redeem_ann:
+        action = "防强赎"
+        reason = "已公告强赎，应在赎回登记日前卖出或转股，避免被以赎回价强制赎回。"
+    elif any(r["title"] == "强赎迫近" for r in risks):
+        action = "防强赎"
+        reason = "强赎计数已接近触发，高溢价会在强赎后压缩，建议提前止盈或转股。"
+    elif is_due_soon:
+        # 临期债：下修博弈窗口已过，结论应落在「还钱 or 促转股」而非下修
+        action = "临期处理"
+        if ytm is not None and ytm < 0:
+            reason = ("剩余 %.2f 年即将到期，且 YTM 为 %.2f%%——持有到期会亏损，"
+                      "只剩正股上涨促转股一条路，否则应逢高离场。" % (year_left, ytm))
+        else:
+            reason = ("剩余 %.2f 年即将到期，下修博弈窗口已基本关闭，"
+                      "结局要么促转股、要么按赎回价还钱，请按到期价值权衡。" % year_left)
+    elif any(r["title"] in ("已满足下修条件", "接近下修条件") for r in chances):
+        if any(r["title"] == "破净限制下修" for r in risks):
+            action = "观望"
+            reason = "虽接近下修条件，但正股已破净，下修受净资产约束，博弈空间有限。"
+        else:
+            action = "博弈下修"
+            reason = "已接近/满足下修条件，若大股东有促转股动力，可博弈下修带来的转股价值抬升。"
+    elif grade in ("健康", "良好") and premium is not None and premium < 30:
+        action = "双低关注"
+        reason = "债底与弹性结构较好、溢价率不高，符合双低思路，可纳入观察池并跟踪双低榜。"
+    elif is_delisted:
+        action = "已退市"
+        reason = "该转债已退市并停止交易，页面数据为归档快照，不再更新，仅供历史查询参考。"
+    elif is_due_soon:
+        action = "临期处理"
+        reason = ("剩余 %.2f 年即将到期，下修博弈窗口已基本关闭，"
+                  "结局要么促转股、要么按赎回价还钱，请按到期价值权衡。" % year_left)
+    elif grade == "偏弱" or high_cnt >= 1:
+        action = "规避"
+        reason = "高风险项或结构短板明显，除非有明确的信用/条款判断，否则不建议参与。"
+    else:
+        action = "观望"
+        reason = "没有突出的机会点，也没有致命风险，等更强的信号（下修、强赎、价格回落）再介入。"
+
+    # 已退市债：风险/机会清单均按活债口径生成，对已停止交易的债无意义且会误导
+    # （如继续提示「距强赎很近」「低溢价可兑现」），故统一清空，只留归档说明。
+    if is_delisted:
+        chances = []
+        risks = [{"level": "low", "title": "已退市归档",
+                  "detail": "该转债已退市停止交易，历史数据不再更新",
+                  "action": "仅供查询参考，不存在交易或条款博弈空间"}]
+
+    return {
+        "score": score,
+        "grade": grade,
+        "grade_desc": desc,
+        "risks": risks,
+        "chances": chances,
+        "verdict": {"action": action, "reason": reason, "links": links},
+    }
+
+
 def get_checkup(code):
     """组装转债体检卡数据（东财自算 + 集思录增强 + 腾讯实时价 + db 持有人 + 预警）。"""
     bond = get_bond(code)
@@ -620,7 +897,7 @@ def get_checkup(code):
         else:
             elasticity = "溢价率>30%，偏债、弹性弱"
 
-    return {
+    data = {
         "code": code,
         "bond_name": bond.get("bond_name") or em.get("bond_name") or code,
         "stock_name": bond.get("stock_name") or em.get("stock_code"),
@@ -662,6 +939,12 @@ def get_checkup(code):
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source": "东财(自算债底/YTM) + 集思录(增强) + 腾讯行情(实时)",
     }
+    # 汇总诊断（评分/风险清单/机会清单/动作建议），供体检卡渲染；详情页亦可复用
+    try:
+        data["diagnosis"] = build_diagnosis(data)
+    except Exception:
+        data["diagnosis"] = None
+    return data
 
 
 def get_realtime(code):

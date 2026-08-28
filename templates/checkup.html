@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ data.bond_name }} ({{ code }}) 转债体检卡 - 实时数据分析</title>
-<meta name="description" content="{{ data.bond_name }} 可转债体检卡：实时分析债底、YTM、转股溢价率、强赎/下修状态与持有人结构，可转债投资工具提炼核心低风险要素。">
-<meta name="keywords" content="{{ data.bond_name }},{{ code }},可转债投资,低风险投资,可转债体检,可转债分析,债底,YTM,转股溢价率">
+<title>{{ data.bond_name }} ({{ code }}) 转债体检诊断 - 评分·风险·机会·建议</title>
+<meta name="description" content="{{ data.bond_name }} 可转债体检诊断报告：综合评分、风险清单、机会清单与明确操作建议，30 秒判断该转债值不值得深看，可转债投资分析工具。">
+<meta name="keywords" content="{{ data.bond_name }},{{ code }},可转债诊断,可转债评分,转债风险,下修博弈,强赎,可转债分析">
 <link rel="stylesheet" href="/static/style.css?v=8">
 <style>
   .ck-head { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:6px 0 14px; }
@@ -21,14 +21,56 @@
   .ck-btn:disabled { opacity:.6; cursor:default; }
   .ck-updated { font-size:12px; color:#888; width:100%; text-align:right; margin-top:-6px; }
 
-  .conclusion { background:#f8fafc; border:1px solid #cbd5e1; border-radius:14px; padding:14px 16px; margin:10px 0 18px; }
-  .conclusion h3 { margin:0 0 10px; font-size:14px; color:#334155; }
-  .concl-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
-  .concl { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; }
-  .concl .tag { font-size:12px; color:#64748b; font-weight:600; }
-  .concl .val { font-size:15px; font-weight:600; margin:4px 0 2px; }
-  .concl .desc { font-size:12px; color:#475569; line-height:1.5; }
+  /* ===== 诊断头部：评分环 + 档位 + 动作 ===== */
+  .diag { display:grid; grid-template-columns:170px 1fr; gap:20px; align-items:center;
+    background:#f8fafc; border:1px solid #cbd5e1; border-radius:14px; padding:18px 20px; margin:10px 0 18px; }
+  .score-wrap { text-align:center; }
+  .ring { width:130px; height:130px; margin:0 auto; position:relative; }
+  .ring svg { transform:rotate(-90deg); }
+  .ring .ring-bg { fill:none; stroke:#e2e8f0; stroke-width:12; }
+  .ring .ring-fg { fill:none; stroke-width:12; stroke-linecap:round;
+    transition:stroke-dashoffset .6s ease; }
+  .ring .ring-txt { position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; }
+  .ring .num { font-size:30px; font-weight:700; line-height:1; }
+  .ring .lbl { font-size:11px; color:#64748b; margin-top:4px; }
+  .grade-name { margin-top:10px; font-size:16px; font-weight:700; }
+  .grade-desc { font-size:12px; color:#64748b; margin-top:4px; line-height:1.5; }
 
+  .verdict-box { align-self:stretch; }
+  .verdict-tag { display:inline-block; font-size:13px; font-weight:700; padding:6px 14px;
+    border-radius:16px; margin-bottom:10px; }
+  .v-healthy { background:#E1F5EE; color:#0F6E56; }
+  .v-good    { background:#E6F1FB; color:#185FA5; }
+  .v-normal  { background:#F1EFE8; color:#444441; }
+  .v-weak    { background:#FAEEDA; color:#854F0B; }
+  .v-danger  { background:#FCE8E6; color:#c0392b; }
+  .v-done    { background:#F1EFE8; color:#6b7280; }
+  .verdict-reason { font-size:14px; line-height:1.75; color:#1f2937; }
+  .verdict-links { margin-top:12px; display:flex; flex-wrap:wrap; gap:8px; }
+  .vlink { font-size:12.5px; padding:5px 12px; border:1px solid #d0d7de; border-radius:14px;
+    background:#fff; color:#185fa5; text-decoration:none; }
+  .vlink:hover { background:#f0f6ff; }
+
+  /* ===== 风险 / 机会清单 ===== */
+  .lists { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px; }
+  .list-card { border-radius:14px; background:#fff; border:1px solid #e5e7eb; overflow:hidden; }
+  .list-card .lh { padding:10px 14px; font-weight:600; font-size:14px; }
+  .list-card.risk .lh { background:#FCE8E6; color:#c0392b; border-bottom:1px solid #F5C6C2; }
+  .list-card.chance .lh { background:#E1F5EE; color:#0F6E56; border-bottom:1px solid #5DCAA5; }
+  .list-card .lb { padding:10px 14px 14px; }
+  .item { padding:9px 0; border-bottom:1px dashed #eef1f4; }
+  .item:last-child { border-bottom:none; }
+  .item .t { font-size:13.5px; font-weight:600; color:#1f2937; display:flex; align-items:center; gap:6px; }
+  .badge { font-size:11px; padding:1px 7px; border-radius:9px; font-weight:600; }
+  .b-high { background:#FCE8E6; color:#c0392b; }
+  .b-mid  { background:#FAEEDA; color:#854F0B; }
+  .b-low  { background:#F1EFE8; color:#6b7280; }
+  .item .d { font-size:12.5px; color:#475569; margin-top:3px; line-height:1.55; }
+  .item .a { font-size:12.5px; color:#0F6E56; margin-top:3px; }
+  .empty { font-size:12.5px; color:#94a3b8; padding:6px 0; }
+
+  /* ===== 三维指标卡（精简，资料看详情页）===== */
   .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
   .card { border-radius:14px; padding:0; overflow:hidden; background:#fff; border:1px solid #e5e7eb; }
   .card .ch { padding:10px 14px; font-weight:600; font-size:14px; }
@@ -44,26 +86,26 @@
   .row .v small { font-size:11px; color:#94a3b8; font-weight:400; }
   .warn-line { font-size:12.5px; color:#475569; margin-top:8px; line-height:1.55; }
   .warn-urgent { color:#d4263a; } .warn-high { color:#d97706; } .warn-normal { color:#0a7d3e; }
-
   .holder-card { margin-top:14px; }
   .drive { font-size:12.5px; line-height:1.6; color:#475569; margin-top:8px; }
   .drive b { color:#0F6E56; }
-
   .note { font-size:12px; color:#94a3b8; margin-top:18px; line-height:1.6; }
   @media (max-width: 880px){
     .cards { grid-template-columns:1fr; }
-    .concl-grid { grid-template-columns:repeat(2,1fr); }
+    .lists { grid-template-columns:1fr; }
+    .diag { grid-template-columns:1fr; }
   }
 </style>
 </head>
 <body>
 {% include '_nav.html' %}
 <div class="container">
+  {% set dg = data.diagnosis %}
 
   <nav class="breadcrumb" aria-label="breadcrumb">
     <a href="/">首页</a>
     <a href="{{ url_for('bond_detail', code=code) }}">{{ data.bond_name or code }}</a>
-    <span class="current">转债体检卡</span>
+    <span class="current">转债体检诊断</span>
   </nav>
 
   <div class="ck-head">
@@ -71,42 +113,81 @@
     <span class="ck-price" id="bondPrice">{{ '%.2f'|format(data.bond_price) if data.bond_price is not none else '—' }}</span>
     <span class="pct {{ 'up' if (data.bond_pct is not none and data.bond_pct > 0) else ('down' if (data.bond_pct is not none and data.bond_pct < 0) else 'flat') }}" id="bondPct">{% if data.bond_pct is not none %}{{ '+' if data.bond_pct > 0 else '' }}{{ '%.2f'|format(data.bond_pct) }}%{% else %}—{% endif %}</span>
     <div class="ck-actions">
-      <a class="ck-btn" href="{{ url_for('bond_detail', code=code) }}">← 返回详情</a>
+      <a class="ck-btn" href="{{ url_for('bond_detail', code=code) }}">← 返回完整资料</a>
       {% if not data.is_delisted %}<button class="ck-btn" id="refreshBtn" onclick="refreshRealtime()">🔄 刷新实时行情</button>{% endif %}
     </div>
     <div class="ck-updated" id="rtUpdated">数据时间：{{ data.updated_at }} · 来源：{{ data.source }}</div>
   </div>
 
-  <!-- 核心结论：抓牛鼻子 -->
-  <div class="conclusion">
-    <h3>🩺 核心结论（抓牛鼻子）</h3>
-    <div class="concl-grid">
-      <div class="concl">
-        <div class="tag">① 定基调</div>
-        <div class="val">{{ data.tier_name }}</div>
-        <div class="desc">{{ data.tier_desc }}</div>
+  <!-- ===== 诊断头部 ===== -->
+  {% if dg %}
+  <div class="diag">
+    <div class="score-wrap">
+      <div class="ring">
+        <svg width="130" height="130" viewBox="0 0 130 130">
+          <circle class="ring-bg" cx="65" cy="65" r="54"></circle>
+          <circle class="ring-fg" id="ringFg" cx="65" cy="65" r="54"
+                  stroke-dasharray="339.29" stroke-dashoffset="339.29"></circle>
+        </svg>
+        <div class="ring-txt">
+          <div class="num" id="scoreNum">0</div>
+          <div class="lbl">综合评分 / 100</div>
+        </div>
       </div>
-      <div class="concl">
-        <div class="tag">② 安全垫</div>
-        <div class="val">{% if data.ytm is not none %}YTM {{ '%.2f'|format(data.ytm) }}%{% elif data.pure_value is not none %}债底 {{ '%.2f'|format(data.pure_value) }}{% else %}—{% endif %}</div>
-        <div class="desc">{{ data.safety or '—' }}</div>
-      </div>
-      <div class="concl">
-        <div class="tag">③ 弹性</div>
-        <div class="val">{% if data.premium is not none %}溢价 {{ '%.2f'|format(data.premium) }}%{% else %}—{% endif %}</div>
-        <div class="desc">{{ data.elasticity or '—' }}</div>
-      </div>
-      <div class="concl">
-        <div class="tag">④ 天花板</div>
-        <div class="val">{% if data.upside_to_redeem is not none %}距强赎 +{{ '%.1f'|format(data.upside_to_redeem) }}%{% else %}—{% endif %}</div>
-        <div class="desc">{{ data.down_potential or '—' }}{% if data.holder and data.holder.is_controller %}；大股东持仓，促转股动力强{% endif %}</div>
+      <div class="grade-name" id="gradeName">{{ dg.grade }}</div>
+      <div class="grade-desc">{{ dg.grade_desc }}</div>
+    </div>
+
+    <div class="verdict-box">
+      <div class="verdict-tag" id="verdictTag">{{ dg.verdict.action }}</div>
+      <div class="verdict-reason">{{ dg.verdict.reason }}</div>
+      <div class="verdict-links">
+        {% for lk in dg.verdict.links %}
+        <a class="vlink" href="{{ lk.url }}">{{ lk.text }} →</a>
+        {% endfor %}
       </div>
     </div>
   </div>
 
-  <!-- 三维指标卡 -->
+  <!-- ===== 风险 / 机会清单 ===== -->
+  <div class="lists">
+    <div class="list-card risk">
+      <div class="lh">⚠️ 风险清单（{{ dg.risks|length }}）</div>
+      <div class="lb">
+        {% for r in dg.risks %}
+        <div class="item">
+          <div class="t">
+            <span class="badge b-{{ r.level }}">{{ {'high':'高','mid':'中','low':'低'}[r.level] }}</span>
+            {{ r.title }}
+          </div>
+          <div class="d">{{ r.detail }}</div>
+          <div class="a">→ {{ r.action }}</div>
+        </div>
+        {% else %}
+        <div class="empty">未发现明显风险项。</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="list-card chance">
+      <div class="lh">💡 机会清单（{{ dg.chances|length }}）</div>
+      <div class="lb">
+        {% for c in dg.chances %}
+        <div class="item">
+          <div class="t">{{ c.title }}</div>
+          <div class="d">{{ c.detail }}</div>
+          <div class="a">→ {{ c.action }}</div>
+        </div>
+        {% else %}
+        <div class="empty">暂无突出机会点。</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ===== 三维指标（精简；完整资料见详情页）===== -->
   <div class="cards">
-    <!-- 债性 -->
     <div class="card teal">
       <div class="ch">🛡️ 债性 · 防守（保底）</div>
       <div class="cb">
@@ -120,7 +201,6 @@
       </div>
     </div>
 
-    <!-- 股性 -->
     <div class="card blue">
       <div class="ch">📈 股性 · 进攻（弹性）</div>
       <div class="cb">
@@ -133,22 +213,21 @@
       </div>
     </div>
 
-    <!-- 条款博弈 -->
     <div class="card amber">
       <div class="ch">🎯 条款 · 超额收益</div>
       <div class="cb">
         <div class="row"><span class="k">强赎触发价</span><span class="v">{% if data.force_redeem_price is not none %}{{ '%.2f'|format(data.force_redeem_price) }}<small> 元</small>{% else %}—{% endif %}</span></div>
         <div class="row"><span class="k">距强赎空间</span><span class="v">{% if data.upside_to_redeem is not none %}{{ '+' if data.upside_to_redeem > 0 else '' }}{{ '%.1f'|format(data.upside_to_redeem) }}%{% else %}—{% endif %}</span></div>
         <div class="row"><span class="k">回售触发价</span><span class="v">{% if data.put_convert_price is not none %}{{ '%.2f'|format(data.put_convert_price) }}<small> 元</small>{% else %}—{% endif %}</span></div>
-        {% if data.redeem_warn %}
+        {% if data.redeem_ann %}
+        <div class="warn-line warn-urgent">🔴 已公告强赎：须于赎回登记日前卖出或转股，否则将被以赎回价强制赎回。</div>
+        {% elif data.redeem_warn %}
         <div class="warn-line warn-{{ data.redeem_warn.level }}">⚠️ 强赎预警：近30日 {{ data.redeem_warn.satisfy_cnt }}/15 日正股≥转股价130%，约 {{ data.redeem_warn.remaining }} 交易日触发。</div>
         {% endif %}
         {% if data.revise_warn %}
         <div class="warn-line warn-{{ data.revise_warn.level }}">💡 下修提醒：近30日 {{ data.revise_warn.satisfy_cnt }}/15 日正股低于转股价85%{% if data.revise_warn.status == 'triggered' %}（已满足下修条件）{% else %}，约 {{ data.revise_warn.remaining }} 交易日触发{% endif %}。</div>
         {% endif %}
-        {% if data.redeem_ann %}
-        <div class="warn-line warn-urgent">🔴 已公告强赎：该转债已发布强赎公告，不再展示强赎/下修预警；须于赎回登记日前卖出或转股，否则将被以赎回价强制赎回。</div>
-        {% elif not data.redeem_warn and not data.revise_warn %}
+        {% if not data.redeem_ann and not data.redeem_warn and not data.revise_warn %}
         <div class="warn-line">当前未触发强赎/下修预警条件。</div>
         {% endif %}
       </div>
@@ -173,13 +252,58 @@
   </div>
 
   <p class="note">
-    数据来源：东方财富（自算债底/YTM、票面利率/赎回价/转股价/评级/到期/余额，全量覆盖）+ 集思录实时（精确债底/YTM/评级/PB/强赎回售触发价增强）+ 腾讯行情（转债与正股实时价、涨跌幅）+ 本地库（十大持有人结构）。
+    本页为<b>诊断结论页</b>：综合评分由债性安全、股性弹性、条款博弈、信用风险四部分加权生成，风险/机会清单与操作建议均由指标自动推导。
+    <b>完整原始资料（历史下修明细、持有人明细、走势图）请见「返回完整资料」的详情页。</b><br>
+    数据来源：东方财富（自算债底/YTM、票面利率/赎回价/转股价/评级/到期/余额）+ 集思录实时（精确债底/YTM/评级/PB/强赎回售触发价增强）+ 腾讯行情（转债与正股实时价）+ 本地库（十大持有人结构）。
     强赎/下修预警口径与全站一致（滚动30交易日，按市场通用 85%/15-30 测算）。
-    债底、YTM、强赎/回售触发价等以各转债公告条款为准；投资有风险，本卡仅供分析参考，不构成建议。
+    债底、YTM、强赎/回售触发价等以各转债公告条款为准；投资有风险，本页仅供分析参考，不构成建议。
   </p>
 </div>
 
 <script>
+/* ---------- 评分环动画 + 档位配色 ---------- */
+(function(){
+  var score = {{ dg.score if dg else 0 }};
+  var grade = {{ (dg.grade if dg else '')|tojson }};
+  var colorMap = {
+    '健康': '#1a9e5f', '良好': '#185FA5', '一般': '#854F0B',
+    '偏弱': '#d97706', '高危': '#c0392b', '已退市': '#6b7280'
+  };
+  var tagMap = {
+    '防强赎': 'v-danger', '规避': 'v-danger', '博弈下修': 'v-good',
+    '双低关注': 'v-healthy', '观望': 'v-normal', '临期处理': 'v-weak', '已退市': 'v-done'
+  };
+  var C = 2 * Math.PI * 54;   // 周长 ≈ 339.29
+  var fg = document.getElementById('ringFg');
+  if (fg) {
+    fg.style.stroke = colorMap[grade] || '#185FA5';
+    fg.setAttribute('stroke-dasharray', C.toFixed(2));
+    fg.setAttribute('stroke-dashoffset', C.toFixed(2));
+    // 下一帧再设目标值，触发过渡动画
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        fg.setAttribute('stroke-dashoffset', (C * (1 - score / 100)).toFixed(2));
+      });
+    });
+  }
+  // 数字滚动
+  var numEl = document.getElementById('scoreNum');
+  if (numEl) {
+    var cur = 0, step = Math.max(1, Math.round(score / 40));
+    var t = setInterval(function(){
+      cur += step;
+      if (cur >= score) { cur = score; clearInterval(t); }
+      numEl.textContent = cur;
+    }, 20);
+  }
+  var vt = document.getElementById('verdictTag');
+  if (vt) {
+    var txt = vt.textContent.trim();
+    vt.className = 'verdict-tag ' + (tagMap[txt] || 'v-normal');
+  }
+})();
+
+/* ---------- 实时行情局部刷新 ---------- */
 function setNum(id, v){ var el=document.getElementById(id); if(el) el.textContent = (v==null?'—':(typeof v==='number'?v.toFixed(2):v)); }
 function setPct(id, v){
   var el=document.getElementById(id); if(!el) return;
@@ -201,7 +325,6 @@ function refreshRealtime(){
         setPct('stockPct', d.stock_pct);
         setNum('convValue', d.convert_value);
         setNum('premium', d.premium);
-        // 若服务端顺带回填了纯债/赎回价（首载冷启动被救回），一并刷新
         if (d.pure_value != null) setNum('pureValue', d.pure_value);
         if (d.redeem_price != null) setNum('redeemPrice', d.redeem_price);
         document.getElementById('rtUpdated').textContent = '实时更新：' + d.updated_at + ' · 来源：腾讯行情(实时)' + (d.pure_value != null || d.redeem_price != null ? ' · 已顺带回填债底/赎回价' : '');
