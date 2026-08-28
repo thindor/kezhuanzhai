@@ -565,7 +565,8 @@ def bonds_list():
     for b in rows_all:
         _enrich_derived(b)
 
-    # 按列排序：缺失值(None) 永远排最后，与排序方向无关（先排非空，再接空值）
+    # 按列排序：①已退市债永远置后（与 SQL COALESCE(is_delisted,0) ASC 一致，避免第一页被退市债占满）；
+    # ②缺失值(None) 在各自分组内排最后，与排序方向无关
     def _scale_num(b):
         rs = b.get("remaining_scale")
         if rs is not None and rs > 0:
@@ -585,10 +586,14 @@ def bonds_list():
         "updated": lambda b: b.get("updated_at"),
         "holder": lambda b: b.get("holder_count") or 0,
     }.get(sort)
-    _non_null = [b for b in rows_all if _key_fn(b) is not None]
-    _null = [b for b in rows_all if _key_fn(b) is None]
-    _non_null.sort(key=_key_fn, reverse=(order == "desc"))
-    rows_sorted = _non_null + _null
+    _act = [b for b in rows_all if not b.get("is_delisted")]
+    _del = [b for b in rows_all if b.get("is_delisted")]
+    rows_sorted = []
+    for _grp in (_act, _del):
+        _non_null = [b for b in _grp if _key_fn(b) is not None]
+        _null = [b for b in _grp if _key_fn(b) is None]
+        _non_null.sort(key=_key_fn, reverse=(order == "desc"))
+        rows_sorted.extend(_non_null + _null)
 
     # 在排序后的完整序列上切片分页
     start = (page - 1) * page_size
