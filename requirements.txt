@@ -3,3 +3,9 @@ requests>=2.31
 beautifulsoup4>=4.12
 pypinyin>=0.50
 gunicorn>=21.2
+
+# 可转债数据兜底源（部署端必须安装，否则功能静默降级）：
+#   当前转股价回填 bond_zh_cov_info、强赎/不强赎事件 bond_cb_redeem_jsl、下修记录 bond_cb_adj_logs_jsl
+# 代码中均为 try 导入并降级，缺失不会导致启动崩溃，但会造成转股价/溢价率/双低值缺失或不准、
+# 公告强赎事件采集不到。版本与部署端实测一致，请勿随意升级。
+akshare==1.18.81
