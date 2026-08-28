@@ -14,6 +14,7 @@
     <a href="/double-low" class="{{ 'active' if request.path.startswith('/double-low') }}">双低策略</a>
     <a href="/new-bonds" class="{{ 'active' if request.path.startswith('/new-bonds') }}">新发转债</a>
     <a href="/xiaopanzhai" class="{{ 'active' if request.path.startswith('/xiaopanzhai') }}">小盘债</a>
+    <a href="/watchlist" class="{{ 'active' if request.path.startswith('/watchlist') }}">我的关注</a>
     <a href="/admin" class="{{ 'active' if request.path.startswith('/admin') }}">管理后台</a>
   </nav>
   <form class="nav-search" onsubmit="return false;">
@@ -24,3 +25,45 @@
 </header>
 <script src="/static/search.js" defer></script>
 <div class="freshness"><span class="dot"></span>数据截至 <b>{{ data_as_of }}</b> · 每日 16:30 收盘后自动更新（盘中实时价请点对应刷新按钮）</div>
+
+<!-- 底部浮动对比栏：session 内已选转债 -->
+<div id="compareTray" class="compare-tray" style="display:none">
+  <span class="ct-label">对比栏</span>
+  <span id="ctCodes" class="ct-codes"></span>
+  <a class="ct-go" href="/compare">去对比 →</a>
+  <button class="ct-clear" onclick="clearCompareTray()">清空</button>
+</div>
+<style>
+  .compare-tray { position:fixed; left:16px; bottom:16px; z-index:50; display:flex; align-items:center; gap:10px;
+    background:#0f172a; color:#e2e8f0; border-radius:30px; padding:8px 8px 8px 16px; box-shadow:0 6px 22px rgba(15,23,42,.28);
+    font-size:13px; max-width:calc(100vw - 32px); }
+  .compare-tray .ct-label { font-weight:700; color:#94a3b8; }
+  .compare-tray .ct-codes { display:flex; gap:6px; flex-wrap:wrap; }
+  .compare-tray .ct-codes .chip { background:#1e293b; border-radius:12px; padding:3px 10px; font-weight:600; }
+  .compare-tray .ct-go { color:#7dd3fc; text-decoration:none; font-weight:700; margin-left:4px; }
+  .compare-tray .ct-clear { background:none; border:none; color:#fca5a5; cursor:pointer; font-size:12.5px; padding:4px 8px; }
+</style>
+<script>
+function renderCompareTray(list){
+  var tray = document.getElementById('compareTray');
+  var box = document.getElementById('ctCodes');
+  if(!tray || !box) return;
+  list = list || [];
+  if(!list.length){ tray.style.display='none'; return; }
+  tray.style.display='flex';
+  box.innerHTML = list.map(function(c){ return '<span class="chip">'+c+'</span>'; }).join('');
+}
+function clearCompareTray(){
+  fetch('/api/compare/clear', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
+    if(d && d.ok) renderCompareTray([]);
+  }).catch(function(e){ console.error(e); });
+}
+// 页面载入时根据 session 渲染对比栏
+(function(){
+  try {
+    fetch('/api/compare/state').then(function(r){return r.json();}).then(function(d){
+      if(d && d.ok) renderCompareTray(d.compare);
+    }).catch(function(){});
+  } catch(e){}
+})();
+</script>

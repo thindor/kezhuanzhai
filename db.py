@@ -175,6 +175,23 @@ def init_db():
         error_text  TEXT
     )""")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_collect_steps_run ON collect_steps(run_id)")
+    # 个人关注列表（单用户站点，按 bond_code 唯一；「我的关注」页与关注切换用）
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS watchlist (
+        bond_code   TEXT PRIMARY KEY,
+        bond_name   TEXT,
+        added_at    TEXT
+    )""")
+    # 个人决策记录（买入/观望/规避/关注 + 备注 + 时间；保留历史便于回看当时判断）
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS decisions (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        bond_code   TEXT NOT NULL,
+        decision    TEXT NOT NULL,
+        note        TEXT,
+        created_at  TEXT
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_decisions_bond ON decisions(bond_code)")
     conn.commit()
     conn.close()
     # 启动即按到期日/摘牌日幂等回填退市标记（覆盖存量债券）
@@ -1984,3 +2001,57 @@ def get_new_bonds(days=180):
         except Exception:
             r["remain_years"] = None
     return rows
+
+
+# ===================== 个人关注 / 决策记录（单用户站点） =====================
+def add_watch(code, name=None):
+    """加入关注；已存在则刷新关注时间。"""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO watchlist(bond_code, bond_name, added_at) VALUES(?,?,?)",
+                (code, name, _now_str()))
+    conn.commit(); conn.close()
+
+
+def remove_watch(code):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM watchlist WHERE bond_code=?", (code,))
+    conn.commit(); conn.close()
+
+
+def is_watched(code):
+    conn = get_conn(); cur = conn.cursor()
+    r = cur.execute("SELECT 1 FROM watchlist WHERE bond_code=?", (code,)).fetchone()
+    conn.close()
+    return r is not None
+
+
+def list_watch():
+    """返回关注列表（按加入时间倒序）。"""
+    conn = get_conn(); conn.row_factory = sqlite3.Row; cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT bond_code, bond_name, added_at FROM watchlist ORDER BY added_at DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def save_decision(code, decision, note=None):
+    """记录一条决策（保留历史，不做覆盖）。"""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("INSERT INTO decisions(bond_code, decision, note, created_at) VALUES(?,?,?,?)",
+                (code, decision, (note or "").strip() or None, _now_str()))
+    conn.commit(); conn.close()
+
+
+def list_decisions(code):
+    """返回某债全部决策历史（按时间倒序）。"""
+    conn = get_conn(); conn.row_factory = sqlite3.Row; cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT id, decision, note, created_at FROM decisions WHERE bond_code=? ORDER BY created_at DESC",
+        (code,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def latest_decision(code):
+    rs = list_decisions(code)
+    return rs[0] if rs else None

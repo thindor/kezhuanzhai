@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>横向对比 - 可转债诊断</title>
+<link rel="stylesheet" href="/static/style.css?v=8">
+<style>
+  .cmp-head { display:flex; align-items:baseline; gap:12px; margin:8px 0 14px; flex-wrap:wrap; }
+  .cmp-head h2 { margin:0; font-size:20px; font-weight:600; }
+  .cmp-head .cnt { font-size:13px; color:#888; }
+  .cmp-empty { background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:40px 20px; text-align:center; color:#64748b; }
+  .cmp-empty a { color:#185FA5; font-weight:600; }
+  .cmp-clear { margin-left:auto; border:1px solid #d0d7de; background:#fff; border-radius:14px; padding:6px 14px;
+    font-size:13px; cursor:pointer; font-weight:600; color:#c0392b; }
+  .cmp-clear:hover { background:#fce8e6; }
+  table.cmp { width:100%; border-collapse:collapse; background:#fff; border-radius:14px; overflow:hidden;
+    border:1px solid #e5e7eb; font-size:13.5px; }
+  table.cmp th, table.cmp td { padding:10px 12px; text-align:left; border-bottom:1px solid #f0f2f5; vertical-align:top; }
+  table.cmp thead th { background:#f8fafc; position:sticky; top:0; }
+  table.cmp tbody th { background:#fbfdff; font-weight:600; color:#475569; font-size:12.5px; white-space:nowrap; width:120px; }
+  table.cmp td.num { font-weight:600; font-variant-numeric:tabular-nums; }
+  .bond-col a { color:#185FA5; text-decoration:none; font-weight:700; font-size:14px; }
+  .bond-col .code { font-size:12px; color:#888; font-weight:400; }
+  .bond-col .rm { font-size:12px; color:#c0392b; cursor:pointer; margin-left:6px; border:none; background:none; }
+  .na { color:#94a3b8; }
+  .v-good { color:#0F6E56; } .v-bad { color:#c0392b; }
+  @media (max-width: 760px){ table.cmp { font-size:12px; } table.cmp th, table.cmp td { padding:7px 8px; } }
+</style>
+</head>
+<body>
+{% include '_nav.html' %}
+<div class="container">
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">首页</a>
+    <span class="current">横向对比</span>
+  </nav>
+
+  <div class="cmp-head">
+    <h2>⚖️ 横向对比</h2>
+    <span class="cnt">{{ cards|length }} 只 · 看它们在市场里算贵还是便宜</span>
+    {% if cards %}<button class="cmp-clear" onclick="clearCompare()">清空对比</button>{% endif %}
+  </div>
+
+  {% if not cards %}
+  <div class="cmp-empty">
+    还没有选中的转债。<br>在任意转债的<b>体检卡</b>或<b>详情页</b>点「＋ 对比」即可加入（最多 4 只）。
+  </div>
+  {% else %}
+  <table class="cmp">
+    <thead>
+      <tr>
+        <th>指标</th>
+        {% for c in cards %}
+        <th class="bond-col">
+          <a href="/bond/{{ c.code }}/checkup">{{ c.name }}</a>
+          <div class="code">{{ c.code }}</div>
+          <button class="rm" onclick="removeCompare('{{ c.code }}')">移除</button>
+        </th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th>综合评分</th>
+        {% for c in cards %}<td class="num">{{ c.data.diagnosis.score if c.data.diagnosis else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>动作建议</th>
+        {% for c in cards %}<td>{{ c.data.diagnosis.verdict.action if c.data.diagnosis else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>现价(元)</th>
+        {% for c in cards %}<td class="num">{{ '%.2f'|format(c.data.bond_price) if c.data.bond_price is not none else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>正股现价(元)</th>
+        {% for c in cards %}<td class="num">{{ '%.2f'|format(c.data.stock_price) if c.data.stock_price is not none else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>转股价(元)</th>
+        {% for c in cards %}<td class="num">{{ '%.3f'|format(c.data.transfer_price) if c.data.transfer_price is not none else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>转股价值</th>
+        {% for c in cards %}<td class="num">{{ '%.2f'|format(c.data.convert_value) if c.data.convert_value is not none else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>转股溢价率</th>
+        {% for c in cards %}<td class="num">{{ '%.2f%%'|format(c.data.premium) if c.data.premium is not none else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>到期收益率 YTM</th>
+        {% for c in cards %}<td class="num">{{ '%.2f%%'|format(c.data.ytm) if c.data.ytm is not none else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>纯债价值(债底)</th>
+        {% for c in cards %}<td class="num">{{ '%.2f'|format(c.data.pure_value) if c.data.pure_value is not none else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>评级</th>
+        {% for c in cards %}<td>{{ c.data.rating or '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>剩余年限</th>
+        {% for c in cards %}<td class="num">{{ ('%.2f 年'|format(c.data.year_left)) if c.data.year_left is not none else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>距强赎空间</th>
+        {% for c in cards %}<td class="num">{{ ('+%.1f%%'|format(c.data.upside_to_redeem)) if c.data.upside_to_redeem is not none else '—' }}</td>{% endfor %}
+      </tr>
+      <tr>
+        <th>下修状态</th>
+        {% for c in cards %}
+        <td>
+          {% if c.data.redeem_ann %}🔴 已公告强赎
+          {% elif c.data.revise_warn %}💡 {{ '已满足下修条件' if c.data.revise_warn.status=='triggered' else '接近下修条件' }}
+          {% elif c.data.redeem_warn %}⚠️ 强赎预警
+          {% else %}—{% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<script>
+function removeCompare(code){
+  fetch('/api/compare/remove/' + encodeURIComponent(code), {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){ if(d && d.ok) location.reload(); })
+    .catch(function(e){ alert('请求出错：'+e.message); });
+}
+function clearCompare(){
+  fetch('/api/compare/clear', {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){ if(d && d.ok) location.reload(); })
+    .catch(function(e){ alert('请求出错：'+e.message); });
+}
+</script>
+</body>
+</html>

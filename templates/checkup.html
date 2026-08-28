@@ -90,6 +90,27 @@
   .drive { font-size:12.5px; line-height:1.6; color:#475569; margin-top:8px; }
   .drive b { color:#0F6E56; }
   .note { font-size:12px; color:#94a3b8; margin-top:18px; line-height:1.6; }
+
+  /* ===== 个人操作：关注 / 对比 / 决策 ===== */
+  .ck-btn.watched { background:#fff4e6; border-color:#ef9f27; color:#854F0B; }
+  .ck-btn.in-compare { background:#e6f1fb; border-color:#85b7eb; color:#185FA5; }
+  .decision-card { border-radius:14px; background:#fff; border:1px solid #e5e7eb; padding:16px 18px; margin:18px 0; }
+  .decision-card .dh { font-weight:600; font-size:15px; margin-bottom:10px; }
+  .dec-tag { display:inline-block; font-size:12px; font-weight:700; padding:4px 12px; border-radius:12px; margin-left:8px; }
+  .dt-buy { background:#E1F5EE; color:#0F6E56; } .dt-watch { background:#F1EFE8; color:#444441; }
+  .dt-avoid { background:#FCE8E6; color:#c0392b; } .dt-follow { background:#E6F1FB; color:#185FA5; }
+  .dec-btns { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 10px; }
+  .dec-btn { border:1px solid #d0d7de; background:#fff; border-radius:14px; padding:7px 18px; font-size:13.5px;
+    font-weight:600; cursor:pointer; color:#1f2937; }
+  .dec-btn:hover { background:#f0f6ff; }
+  .dec-btn.buy:hover { background:#E1F5EE; } .dec-btn.avoid:hover { background:#FCE8E6; }
+  .dec-note { width:100%; box-sizing:border-box; border:1px solid #d0d7de; border-radius:10px; padding:8px 10px;
+    font-size:13px; resize:vertical; min-height:42px; margin-bottom:8px; }
+  .dec-hist { margin-top:6px; border-top:1px dashed #eef1f4; padding-top:8px; }
+  .dec-hist .hi { font-size:12.5px; color:#475569; padding:4px 0; border-bottom:1px dashed #f3f5f7; }
+  .dec-hist .hi:last-child { border-bottom:none; }
+  .dec-hist .hi .dt { color:#94a3b8; margin-right:8px; }
+  .dec-hist .hi .badge2 { font-weight:700; margin-right:6px; }
   @media (max-width: 880px){
     .cards { grid-template-columns:1fr; }
     .lists { grid-template-columns:1fr; }
@@ -113,6 +134,8 @@
     <span class="ck-price" id="bondPrice">{{ '%.2f'|format(data.bond_price) if data.bond_price is not none else '—' }}</span>
     <span class="pct {{ 'up' if (data.bond_pct is not none and data.bond_pct > 0) else ('down' if (data.bond_pct is not none and data.bond_pct < 0) else 'flat') }}" id="bondPct">{% if data.bond_pct is not none %}{{ '+' if data.bond_pct > 0 else '' }}{{ '%.2f'|format(data.bond_pct) }}%{% else %}—{% endif %}</span>
     <div class="ck-actions">
+      <button class="ck-btn {{ 'watched' if watched }}" id="watchBtn" onclick="toggleWatch()">{{ '✓ 已关注' if watched else '★ 加入关注' }}</button>
+      <button class="ck-btn {{ 'in-compare' if in_compare }}" id="cmpBtn" onclick="toggleCompare()">{{ '✓ 对比中' if in_compare else '＋ 对比' }}</button>
       <a class="ck-btn" href="{{ url_for('bond_detail', code=code) }}">← 返回完整资料</a>
       {% if not data.is_delisted %}<button class="ck-btn" id="refreshBtn" onclick="refreshRealtime()">🔄 刷新实时行情</button>{% endif %}
     </div>
@@ -251,6 +274,30 @@
     </div>
   </div>
 
+  <!-- ===== 我的决策（个人操作，沉淀判断）===== -->
+  <div class="decision-card">
+    <div class="dh">📌 我的决策
+      {% if decision %}
+        <span class="dec-tag {{ {'买入':'dt-buy','观望':'dt-watch','规避':'dt-avoid','关注':'dt-follow'}[decision.decision] }}">{{ decision.decision }}</span>
+        <span style="font-size:12px;color:#94a3b8;">最近于 {{ decision.created_at }}</span>
+      {% endif %}
+    </div>
+    <div class="dec-btns">
+      <button class="dec-btn buy" onclick="saveDecision('买入')">买入</button>
+      <button class="dec-btn watch" onclick="saveDecision('观望')">观望</button>
+      <button class="dec-btn avoid" onclick="saveDecision('规避')">规避</button>
+      <button class="dec-btn follow" onclick="saveDecision('关注')">关注</button>
+    </div>
+    <textarea class="dec-note" id="decNote" placeholder="备注（可选）：为什么这么定？当时价格/触发条件/你的逻辑…">{{ decision.note or '' }}</textarea>
+    <div class="dec-hist" id="decHist">
+      {% for d in decisions %}
+      <div class="hi"><span class="dt">{{ d.created_at }}</span><span class="badge2 dec-tag {{ {'买入':'dt-buy','观望':'dt-watch','规避':'dt-avoid','关注':'dt-follow'}[d.decision] }}">{{ d.decision }}</span>{{ d.note or '' }}</div>
+      {% else %}
+      <div class="hi" style="color:#94a3b8;">暂无决策记录，点上方按钮沉淀你的判断。</div>
+      {% endfor %}
+    </div>
+  </div>
+
   <p class="note">
     本页为<b>诊断结论页</b>：综合评分由债性安全、股性弹性、条款博弈、信用风险四部分加权生成，风险/机会清单与操作建议均由指标自动推导。
     <b>完整原始资料（历史下修明细、持有人明细、走势图）请见「返回完整资料」的详情页。</b><br>
@@ -332,6 +379,53 @@ function refreshRealtime(){
     })
     .catch(function(e){ alert('请求出错：'+e.message); })
     .finally(function(){ btn.disabled=false; btn.textContent='🔄 刷新实时行情'; });
+}
+
+/* ---------- 个人操作：关注 / 对比 / 决策 ---------- */
+function toggleWatch(){
+  var btn = document.getElementById('watchBtn');
+  btn.disabled = true;
+  fetch('/api/watch/' + encodeURIComponent("{{ code }}"), {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d && d.ok){
+        if(d.watched){ btn.textContent='✓ 已关注'; btn.classList.add('watched'); }
+        else { btn.textContent='★ 加入关注'; btn.classList.remove('watched'); }
+      } else { alert((d&&d.message)||'操作失败'); }
+    })
+    .catch(function(e){ alert('请求出错：'+e.message); })
+    .finally(function(){ btn.disabled=false; });
+}
+function toggleCompare(){
+  var btn = document.getElementById('cmpBtn');
+  btn.disabled = true;
+  var url = '/api/compare/' + ("{{ 'remove' if in_compare else 'add' }}") + '/' + encodeURIComponent("{{ code }}");
+  fetch(url, {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d && d.ok){
+        if(d.compare.indexOf("{{ code }}") >= 0){ btn.textContent='✓ 对比中'; btn.classList.add('in-compare'); }
+        else { btn.textContent='＋ 对比'; btn.classList.remove('in-compare'); }
+        if(window.renderCompareTray) renderCompareTray(d.compare);
+      } else { alert((d&&d.message)||'操作失败'); }
+    })
+    .catch(function(e){ alert('请求出错：'+e.message); })
+    .finally(function(){ btn.disabled=false; });
+}
+function saveDecision(dec){
+  var note = (document.getElementById('decNote').value || '').trim();
+  fetch('/api/decision/' + encodeURIComponent("{{ code }}"), {
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'decision=' + encodeURIComponent(dec) + '&note=' + encodeURIComponent(note)
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d && d.ok){
+        location.reload();
+      } else { alert((d&&d.message)||'保存失败'); }
+    })
+    .catch(function(e){ alert('请求出错：'+e.message); });
 }
 </script>
 </body>

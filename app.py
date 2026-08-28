@@ -917,7 +917,11 @@ def bond_detail(code):
                            put_price=put_price,
                            down_trig=down_trig,
                            remaining_scale=remaining_scale,
-                           is_remaining=is_remaining)
+                           is_remaining=is_remaining,
+                           watched=db.is_watched(code),
+                           decision=db.latest_decision(code),
+                           decisions=db.list_decisions(code),
+                           in_compare=code in session.get("compare", []))
 
 
 @app.route("/api/bond/<code>/holders")
@@ -1247,7 +1251,149 @@ def bond_checkup(code):
     data = checkup.get_checkup(code)
     if not data:
         abort(404)
-    return render_template("checkup.html", data=data, code=code)
+    watched = db.is_watched(code)
+    decision = db.latest_decision(code)
+    decisions = db.list_decisions(code)
+    in_compare = code in session.get("compare", [])
+    return render_template("checkup.html", data=data, code=code,
+                           watched=watched, decision=decision, decisions=decisions, in_compare=in_compare)
+
+
+# ===================== 个人操作：关注 / 决策 / 对比 =====================
+@app.route("/api/watch/<code>", methods=["POST"])
+def api_watch(code):
+    real = resolve_query(code)
+    if not real:
+        return jsonify({"ok": False, "message": "未找到该转债"}), 404
+    code = real
+    bond = get_bond(code)
+    if not bond:
+        return jsonify({"ok": False, "message": "未找到该转债"}), 404
+    if db.is_watched(code):
+        db.remove_watch(code)
+        return jsonify({"ok": True, "watched": False})
+    db.add_watch(code, bond.get("bond_name"))
+    return jsonify({"ok": True, "watched": True})
+
+
+@app.route("/api/decision/<code>", methods=["POST"])
+def api_decision(code):
+    real = resolve_query(code)
+    if not real:
+        return jsonify({"ok": False, "message": "未找到该转债"}), 404
+    code = real
+    if not get_bond(code):
+        return jsonify({"ok": False, "message": "未找到该转债"}), 404
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        decision = payload.get("decision")
+        note = payload.get("note")
+    else:
+        decision = request.form.get("decision")
+        note = request.form.get("note")
+    if decision not in ("买入", "观望", "规避", "关注"):
+        return jsonify({"ok": False, "message": "无效决策"}), 400
+    db.save_decision(code, decision, note)
+    return jsonify({"ok": True, "decision": db.latest_decision(code)})
+
+
+@app.route("/watchlist")
+def watchlist_page():
+    """我的关注：概览 + 一键看诊断。"""
+    items = db.list_watch()
+    rows = []
+    for it in items:
+        code = it["bond_code"]
+        bond = get_bond(code) or {}
+        eff_tp = db.effective_transfer_price(bond) if bond else None
+        # 现价：优先 bonds.current_price，回退 daily_close 最新转债收盘
+        price = bond.get("current_price")
+        if price is None:
+            d = db.get_daily_close(code, 1)
+            price = d[0].get("bond_close") if d else None
+        # 转股溢价率（本地算，避免逐个打实时接口）
+        premium = None
+        if eff_tp and price is not None:
+            d = db.get_daily_close(code, 1)
+            sc = d[0].get("stock_close") if d else None
+            if sc:
+                try:
+                    conv = 100.0 / float(eff_tp) * float(sc)
+                    premium = round((float(price) / conv - 1) * 100, 2)
+                except (TypeError, ValueError):
+                    premium = None
+        # 最新双低（双低榜最近一周）
+        dl = None
+        try:
+            conn = db.get_conn(); conn.row_factory = sqlite3.Row; cur = conn.cursor()
+            r = cur.execute(
+                "SELECT double_low FROM double_low_log WHERE bond_code=? ORDER BY week_start DESC LIMIT 1",
+                (code,)).fetchone()
+            conn.close()
+            dl = round(r["double_low"], 2) if r and r["double_low"] is not None else None
+        except Exception:
+            dl = None
+        rows.append({
+            "code": code,
+            "name": it.get("bond_name") or bond.get("bond_name") or code,
+            "price": price,
+            "premium": premium,
+            "rating": bond.get("rating"),
+            "year_left": bond.get("remain_years"),
+            "double_low": dl,
+            "decision": db.latest_decision(code),
+            "added_at": it.get("added_at"),
+        })
+    return render_template("watchlist.html", rows=rows, count=len(rows))
+
+
+@app.route("/api/compare/add/<code>", methods=["POST"])
+def api_compare_add(code):
+    real = resolve_query(code)
+    if not real:
+        return jsonify({"ok": False, "message": "未找到该转债"}), 404
+    code = real
+    if not get_bond(code):
+        return jsonify({"ok": False, "message": "未找到该转债"}), 404
+    lst = list(session.get("compare", []))
+    if code not in lst:
+        lst.append(code)
+    session["compare"] = lst[-4:]   # 最多对比 4 只
+    return jsonify({"ok": True, "compare": session["compare"]})
+
+
+@app.route("/api/compare/remove/<code>", methods=["POST"])
+def api_compare_remove(code):
+    lst = list(session.get("compare", []))
+    if code in lst:
+        lst.remove(code)
+    session["compare"] = lst
+    return jsonify({"ok": True, "compare": session["compare"]})
+
+
+@app.route("/api/compare/clear", methods=["POST"])
+def api_compare_clear():
+    session["compare"] = []
+    return jsonify({"ok": True, "compare": []})
+
+
+@app.route("/api/compare/state")
+def api_compare_state():
+    return jsonify({"ok": True, "compare": list(session.get("compare", []))})
+
+
+@app.route("/compare")
+def compare_page():
+    """横向对比：选中转债的关键指标并排。"""
+    codes = list(dict.fromkeys(session.get("compare", [])))  # 保序去重
+    cards = []
+    for code in codes:
+        bond = get_bond(code)
+        if not bond:
+            continue
+        data = checkup.get_checkup(code) or {}
+        cards.append({"code": code, "name": bond.get("bond_name") or code, "data": data})
+    return render_template("compare.html", cards=cards)
 
 
 @app.route("/api/bond/<code>/realtime")

@@ -21,6 +21,29 @@
     border:1px solid #5dcaa5; border-radius:16px; padding:5px 14px; text-decoration:none;
     margin-left:4px; transition:.15s; white-space:nowrap; }
   .checkup-link:hover { background:#cdeede; }
+  /* 个人操作：关注 / 对比 / 决策 */
+  .act-bar { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 2px; }
+  .act-btn { border:1px solid #d0d7de; background:#fff; border-radius:18px; padding:7px 16px;
+    font-size:13.5px; font-weight:600; cursor:pointer; color:#185fa5; transition:.15s; }
+  .act-btn:hover { background:#f0f6ff; }
+  .act-btn.watched { background:#fff4e6; border-color:#ef9f27; color:#854F0B; }
+  .act-btn.in-compare { background:#e6f1fb; border-color:#85b7eb; color:#185FA5; }
+  .decision-card { border-radius:14px; background:#fff; border:1px solid #e5e7eb; padding:16px 18px; margin:18px 0 6px; }
+  .decision-card .dh { font-weight:600; font-size:15px; margin-bottom:10px; }
+  .dec-tag { display:inline-block; font-size:12px; font-weight:700; padding:4px 12px; border-radius:12px; margin-left:8px; }
+  .dt-buy { background:#E1F5EE; color:#0F6E56; } .dt-watch { background:#F1EFE8; color:#444441; }
+  .dt-avoid { background:#FCE8E6; color:#c0392b; } .dt-follow { background:#E6F1FB; color:#185FA5; }
+  .dec-btns { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 10px; }
+  .dec-btn { border:1px solid #d0d7de; background:#fff; border-radius:14px; padding:7px 18px; font-size:13.5px;
+    font-weight:600; cursor:pointer; color:#1f2937; }
+  .dec-btn:hover { background:#f0f6ff; } .dec-btn.buy:hover { background:#E1F5EE; } .dec-btn.avoid:hover { background:#FCE8E6; }
+  .dec-note { width:100%; box-sizing:border-box; border:1px solid #d0d7de; border-radius:10px; padding:8px 10px;
+    font-size:13px; resize:vertical; min-height:42px; margin-bottom:8px; }
+  .dec-hist { margin-top:6px; border-top:1px dashed #eef1f4; padding-top:8px; }
+  .dec-hist .hi { font-size:12.5px; color:#475569; padding:4px 0; border-bottom:1px dashed #f3f5f7; }
+  .dec-hist .hi:last-child { border-bottom:none; }
+  .dec-hist .hi .dt { color:#94a3b8; margin-right:8px; }
+  .dec-hist .hi .badge2 { font-weight:700; margin-right:6px; }
 </style>
 <script type="application/ld+json">
 {
@@ -49,6 +72,10 @@
   <div class="bond-head">
     <h2>{{ bond.bond_name or '未知转债' }} <span class="code">{{ code }}</span>{% if bond.is_delisted %} <span class="delist-badge">已退市</span>{% endif %} <a class="checkup-link" href="{{ url_for('bond_checkup', code=code) }}">🩺 转债体检卡</a></h2>
     <p class="sub">正股：{{ bond.stock_name or '-' }}（{{ bond.stock_code or '-' }}）· 评级：{{ bond.rating or '-' }} · 数据来源：{{ bond.data_source or '东方财富' }}</p>
+    <div class="act-bar">
+      <button class="act-btn {{ 'watched' if watched }}" id="watchBtn" onclick="toggleWatch()">{{ '✓ 已关注' if watched else '★ 加入关注' }}</button>
+      <button class="act-btn {{ 'in-compare' if in_compare }}" id="cmpBtn" onclick="toggleCompare()">{{ '✓ 对比中' if in_compare else '＋ 对比' }}</button>
+    </div>
   </div>
 
   {% if bond.is_delisted %}
@@ -254,6 +281,30 @@
       </details>
     </div>
   </section>
+
+  <!-- ===== 我的决策（个人操作，沉淀判断）===== -->
+  <div class="decision-card">
+    <div class="dh">📌 我的决策
+      {% if decision %}
+        <span class="dec-tag {{ {'买入':'dt-buy','观望':'dt-watch','规避':'dt-avoid','关注':'dt-follow'}[decision.decision] }}">{{ decision.decision }}</span>
+        <span style="font-size:12px;color:#94a3b8;">最近于 {{ decision.created_at }}</span>
+      {% endif %}
+    </div>
+    <div class="dec-btns">
+      <button class="dec-btn buy" onclick="saveDecision('买入')">买入</button>
+      <button class="dec-btn watch" onclick="saveDecision('观望')">观望</button>
+      <button class="dec-btn avoid" onclick="saveDecision('规避')">规避</button>
+      <button class="dec-btn follow" onclick="saveDecision('关注')">关注</button>
+    </div>
+    <textarea class="dec-note" id="decNote" placeholder="备注（可选）：为什么这么定？当时价格/触发条件/你的逻辑…">{{ decision.note or '' }}</textarea>
+    <div class="dec-hist">
+      {% for d in decisions %}
+      <div class="hi"><span class="dt">{{ d.created_at }}</span><span class="badge2 dec-tag {{ {'买入':'dt-buy','观望':'dt-watch','规避':'dt-avoid','关注':'dt-follow'}[d.decision] }}">{{ d.decision }}</span>{{ d.note or '' }}</div>
+      {% else %}
+      <div class="hi" style="color:#94a3b8;">暂无决策记录，点上方按钮沉淀你的判断。</div>
+      {% endfor %}
+    </div>
+  </div>
 </div>
   <script>
   // 退市债历史数据已冻结，不提供更新按钮（updateBar 不渲染）
@@ -364,6 +415,51 @@
       });
     });
   }
-  </script>
+  /* ---------- 个人操作：关注 / 对比 / 决策 ---------- */
+  function toggleWatch(){
+    var btn = document.getElementById('watchBtn');
+    btn.disabled = true;
+    fetch('/api/watch/' + encodeURIComponent("{{ code }}"), {method:'POST'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.ok){
+          if(d.watched){ btn.textContent='✓ 已关注'; btn.classList.add('watched'); }
+          else { btn.textContent='★ 加入关注'; btn.classList.remove('watched'); }
+        } else { alert((d&&d.message)||'操作失败'); }
+      })
+      .catch(function(e){ alert('请求出错：'+e.message); })
+      .finally(function(){ btn.disabled=false; });
+  }
+  function toggleCompare(){
+    var btn = document.getElementById('cmpBtn');
+    btn.disabled = true;
+    var url = '/api/compare/' + ("{{ 'remove' if in_compare else 'add' }}") + '/' + encodeURIComponent("{{ code }}");
+    fetch(url, {method:'POST'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.ok){
+          if(d.compare.indexOf("{{ code }}") >= 0){ btn.textContent='✓ 对比中'; btn.classList.add('in-compare'); }
+          else { btn.textContent='＋ 对比'; btn.classList.remove('in-compare'); }
+          if(window.renderCompareTray) renderCompareTray(d.compare);
+        } else { alert((d&&d.message)||'操作失败'); }
+      })
+      .catch(function(e){ alert('请求出错：'+e.message); })
+      .finally(function(){ btn.disabled=false; });
+  }
+  function saveDecision(dec){
+    var note = (document.getElementById('decNote').value || '').trim();
+    fetch('/api/decision/' + encodeURIComponent("{{ code }}"), {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:'decision=' + encodeURIComponent(dec) + '&note=' + encodeURIComponent(note)
+    })
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.ok){ location.reload(); }
+        else { alert((d&&d.message)||'保存失败'); }
+      })
+      .catch(function(e){ alert('请求出错：'+e.message); });
+  }
+</script>
 </body>
 </html>

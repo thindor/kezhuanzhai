@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的关注 - 可转债诊断</title>
+<link rel="stylesheet" href="/static/style.css?v=8">
+<style>
+  .wl-head { display:flex; align-items:baseline; gap:12px; margin:8px 0 14px; }
+  .wl-head h2 { margin:0; font-size:20px; font-weight:600; }
+  .wl-head .cnt { font-size:13px; color:#888; }
+  .wl-empty { background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:40px 20px; text-align:center; color:#64748b; }
+  .wl-empty a { color:#185FA5; font-weight:600; }
+  table.wl { width:100%; border-collapse:collapse; background:#fff; border-radius:14px; overflow:hidden;
+    border:1px solid #e5e7eb; font-size:13.5px; }
+  table.wl th, table.wl td { padding:11px 12px; text-align:left; border-bottom:1px solid #f0f2f5; }
+  table.wl th { background:#f8fafc; font-weight:600; color:#475569; font-size:12.5px; }
+  table.wl tbody tr:hover { background:#fafcff; }
+  table.wl td.num { font-weight:600; font-variant-numeric:tabular-nums; }
+  .d-badge { display:inline-block; font-size:11.5px; font-weight:700; padding:3px 10px; border-radius:10px; }
+  .dt-buy { background:#E1F5EE; color:#0F6E56; } .dt-watch { background:#F1EFE8; color:#444441; }
+  .dt-avoid { background:#FCE8E6; color:#c0392b; } .dt-follow { background:#E6F1FB; color:#185FA5; }
+  .row-act { display:flex; gap:8px; }
+  .mini { border:1px solid #d0d7de; background:#fff; border-radius:14px; padding:5px 12px; font-size:12.5px;
+    font-weight:600; cursor:pointer; color:#185FA5; text-decoration:none; }
+  .mini:hover { background:#f0f6ff; } .mini.in-compare { background:#e6f1fb; border-color:#85b7eb; }
+  .na { color:#94a3b8; }
+</style>
+</head>
+<body>
+{% include '_nav.html' %}
+<div class="container">
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">首页</a>
+    <span class="current">我的关注</span>
+  </nav>
+
+  <div class="wl-head">
+    <h2>⭐ 我的关注</h2>
+    <span class="cnt">{{ count }} 只 · 点击「看诊断」打开该债的体检诊断报告</span>
+  </div>
+
+  {% if not rows %}
+  <div class="wl-empty">
+    还没有关注任何转债。<br>在任意转债的<b>体检卡</b>或<b>详情页</b>点「★ 加入关注」即可出现在这里。
+  </div>
+  {% else %}
+  <table class="wl">
+    <thead>
+      <tr>
+        <th>代码</th><th>名称</th><th>现价</th><th>溢价率</th><th>评级</th>
+        <th>剩余年限</th><th>双低</th><th>我的决策</th><th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="num">{{ r.code }}</td>
+        <td><a href="/bond/{{ r.code }}" style="color:#185FA5;text-decoration:none;font-weight:600;">{{ r.name }}</a></td>
+        <td class="num">{{ '%.2f'|format(r.price) if r.price is not none else '<span class="na">—</span>' }}</td>
+        <td class="num">{{ ('%.2f%%'|format(r.premium)) if r.premium is not none else '<span class="na">—</span>' }}</td>
+        <td>{{ r.rating or '<span class="na">—</span>' }}</td>
+        <td class="num">{{ ('%.2f'|format(r.year_left) ~ ' 年') if r.year_left is not none else '<span class="na">—</span>' }}</td>
+        <td class="num">{{ ('%.2f'|format(r.double_low)) if r.double_low is not none else '<span class="na">—</span>' }}</td>
+        <td>
+          {% if r.decision %}
+          <span class="d-badge dt-{{ {'买入':'buy','观望':'watch','规避':'avoid','关注':'follow'}[r.decision.decision] }}">{{ r.decision.decision }}</span>
+          {% else %}<span class="na">—</span>{% endif %}
+        </td>
+        <td>
+          <div class="row-act">
+            <a class="mini" href="/bond/{{ r.code }}/checkup">看诊断</a>
+            <button class="mini" id="cmp-{{ r.code }}" onclick="addCompare('{{ r.code }}')">＋ 对比</button>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<script>
+function addCompare(code){
+  var btn = document.getElementById('cmp-' + code);
+  btn.disabled = true;
+  fetch('/api/compare/add/' + encodeURIComponent(code), {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d && d.ok){ btn.textContent='✓ 已加'; btn.classList.add('in-compare');
+        if(window.renderCompareTray) renderCompareTray(d.compare); }
+      else { alert((d&&d.message)||'操作失败'); }
+    })
+    .catch(function(e){ alert('请求出错：'+e.message); })
+    .finally(function(){ btn.disabled=false; });
+}
+</script>
+</body>
+</html>
