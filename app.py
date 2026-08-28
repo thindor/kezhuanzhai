@@ -1055,6 +1055,55 @@ def admin_collect_run():
         return jsonify({"ok": False, "message": "启动失败：" + str(e)}), 500
 
 
+@app.route("/admin/collect-holders", methods=["POST"])
+def admin_collect_holders():
+    """后台手动触发持有人增量刷新（不进每日自动管道，低频手动点）。
+
+    独立进程跑 refresh_holders.py，运行前后统计 pending 写入 holder_refresh_status.json，
+    前端轮询 /admin/api/holder-refresh-status 展示进度。
+    """
+    if not is_admin():
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    status_file = os.path.join(BASE_DIR, "holder_refresh_status.json")
+    # 已在运行则拒绝（避免并发重复撞东方财富限流）
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, encoding="utf-8") as f:
+                st = json.load(f)
+            if st.get("running"):
+                return jsonify({"ok": False, "message": "持有人采集任务进行中，请稍后查看状态"})
+        except Exception:
+            pass
+    py = sys.executable
+    log_path = os.path.join(BASE_DIR, "holder_refresh.log")
+    try:
+        with open(log_path, "a", encoding="utf-8") as lf:
+            subprocess.Popen(
+                [py, "refresh_holders.py"],
+                cwd=BASE_DIR, stdout=lf, stderr=lf,
+                start_new_session=(os.name != "nt"))
+        return jsonify({"ok": True, "message": "已启动持有人采集，可在本页查看进度"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": "启动失败：" + str(e)}), 500
+
+
+@app.route("/admin/api/holder-refresh-status")
+def admin_holder_refresh_status():
+    if not is_admin():
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    status_file = os.path.join(BASE_DIR, "holder_refresh_status.json")
+    if not os.path.exists(status_file):
+        return jsonify({"running": False, "updated": 0, "pending_after": 0,
+                        "message": "尚未采集过（点上方按钮手动采集）"})
+    try:
+        with open(status_file, encoding="utf-8") as f:
+            st = json.load(f)
+        st.setdefault("ok", True)
+        return jsonify(st)
+    except Exception as e:
+        return jsonify({"running": False, "message": "状态读取失败：" + str(e)})
+
+
 @app.route("/admin/settings", methods=["GET", "POST"])
 def admin_settings():
     if not is_admin():

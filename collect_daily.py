@@ -10,8 +10,9 @@
   5) checkup.refresh_remaining_scales()        滚动补全剩余规模（集思录前30活跃债写入 bonds.remaining_scale）
   6) checkup.refresh_redeem_prices()        补全到期赎回价（东财全量基础解析写入 bonds.redeem_price）
   7) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
-  8) crawler.refresh_holders_stale()         【持有人增量刷新】仅对「最新报告期<当前应披露期」的未退市转债重抓十大持有人，
-                                            自动补齐已发中报/年报等定期报告的持有人变化；数据未放出者靠每日重试自愈（每轮限 60 只防爆限流）
+
+  注：十大持有人随定期报告（中报/年报等）变化，更新频率低，不进每日自动管道，
+      由管理后台「持有人信息采集」按钮手动触发（见 refresh_holders.py / /admin/collect-holders）。
 
 设计要点：
   - 顺序：先行情(daily_close)，再 seed（用 daily_close 回写现价/转股价），再小盘债，沿用现网 16:30→16:35 时序，
@@ -118,7 +119,7 @@ def main():
     print("[collect] 每日采集总入口启动 @ %s  trigger=%s run_id=%s"
           % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), trigger, run_id))
 
-    # 顺序：行情 -> 基础数据 -> 退市检测 -> 小盘债 -> 剩余规模 -> 到期赎回价 -> 当前转股价 -> 持有人增量刷新
+    # 顺序：行情 -> 基础数据 -> 退市检测 -> 小盘债 -> 剩余规模 -> 到期赎回价 -> 当前转股价
     steps = [
         ("行情 daily_close", lambda: crawler.fetch_daily_all()),
         ("基础数据 seed_bonds", seed_bonds.main),
@@ -127,7 +128,6 @@ def main():
         ("剩余规模 remaining_scale", checkup.refresh_remaining_scales),
         ("到期赎回价 redeem_price", checkup.refresh_redeem_prices),
         ("当前转股价 transfer_price", checkup.refresh_transfer_prices),
-        ("持有人增量刷新 holders", lambda: crawler.refresh_holders_stale(limit=60)),
     ]
     results = []
     for i, (name, fn) in enumerate(steps, 1):
@@ -143,8 +143,8 @@ def main():
         final_status = "partial"   # 次要步骤失败，但核心数据可用
     else:
         final_status = "failed"
-    notes = "行情=%s 基础=%s 退市检测=%s 小盘=%s 剩余规模=%s 赎回价=%s 转股价=%s 持有人=%s，总耗时 %.1fs" % (
-        results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[7],
+    notes = "行情=%s 基础=%s 退市检测=%s 小盘=%s 剩余规模=%s 赎回价=%s 转股价=%s，总耗时 %.1fs" % (
+        results[0], results[1], results[2], results[3], results[4], results[5], results[6],
         time.time() - t_all)
     db.finish_collect_run(run_id, final_status, notes=notes)
     print("\n[collect] 运行结束 run_id=%s status=%s：%s" % (run_id, final_status, notes))

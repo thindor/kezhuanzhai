@@ -60,6 +60,19 @@
         </div>
       </div>
     </div>
+
+    <!-- 持有人信息更新（手动触发） -->
+    <div class="panel">
+      <div class="panel-head">
+        <h2>持有人信息更新</h2>
+        <span class="hint">随中报/年报变化，低频手动刷新（不进每日自动管道）</span>
+      </div>
+      <div class="actions">
+        <button id="holdersBtn" onclick="collectHolders()">采集持有人（增量刷新）</button>
+        <span id="holdersStatus" class="status"></span>
+      </div>
+      <div class="hint" style="margin-top:6px">仅对「库内最新报告期早于当前应披露期」的未退市转债重抓，已最新者跳过；预计 3-6 分钟。剩余未放出的债会在定期报告披露后再次点击补齐。</div>
+    </div>
   </section>
 
   <!-- 区块1：已收录转债（已抓取持有人）— 点菜单才加载 -->
@@ -421,6 +434,51 @@ async function delOne(code){
 function setStatus(s){ document.getElementById('adminStatus').textContent = s; }
 function setBatch(s){ document.getElementById('batchStatus').textContent = s; }
 
+/* ---------- 持有人增量刷新（手动触发） ---------- */
+let holdersTimer = null;
+async function collectHolders(){
+  const btn = document.getElementById('holdersBtn');
+  const st = document.getElementById('holdersStatus');
+  st.textContent = '请求中…';
+  try{
+    const r = await fetch('/admin/collect-holders', {method:'POST'});
+    const d = await r.json().catch(() => ({ok:false, message:'返回非 JSON'}));
+    if(!d.ok){ st.textContent = d.message; return; }
+    btn.disabled = true;
+    pollHolders();
+  }catch(e){ st.textContent = '启动失败：' + e; }
+}
+async function pollHolders(){
+  const st = document.getElementById('holdersStatus');
+  try{
+    const r = await fetch('/admin/api/holder-refresh-status');
+    const d = await r.json().catch(() => ({}));
+    if(d.running){
+      st.textContent = '采集中… ' + (d.message || '');
+      if(!holdersTimer) holdersTimer = setInterval(pollHolders, 5000);
+    }else{
+      st.textContent = d.message || '采集完成';
+      document.getElementById('holdersBtn').disabled = false;
+      if(holdersTimer){ clearInterval(holdersTimer); holdersTimer = null; }
+    }
+  }catch(e){
+    st.textContent = '状态读取失败：' + e;
+    if(holdersTimer){ clearInterval(holdersTimer); holdersTimer = null; }
+    document.getElementById('holdersBtn').disabled = false;
+  }
+}
+async function recoverHoldersPolling(){
+  try{
+    const r = await fetch('/admin/api/holder-refresh-status');
+    const d = await r.json().catch(() => ({}));
+    if(d.running){
+      document.getElementById('holdersBtn').disabled = true;
+      document.getElementById('holdersStatus').textContent = '采集中… ' + (d.message || '');
+      pollHolders();
+    }
+  }catch(e){}
+}
+
 /* ---------- 站点设置 ---------- */
 function onLogoFile(e){
   const f = e.target.files && e.target.files[0];
@@ -456,6 +514,7 @@ function clearLogo(){
 window.addEventListener('DOMContentLoaded', () => {
   const h = (location.hash || '').replace('#', '');
   if(h === 'settings' || h === 'collected' || h === 'market') showTab(h);
+  recoverHoldersPolling();
 });
 
 async function saveSiteSettings(){
