@@ -9,11 +9,8 @@ $wd     = 'H:\trybuddy\yonghui\cb_holder_system'
 $logOut = "$wd\_flask_out.log"
 $logErr = "$wd\_flask_err.log"
 
-# 1) 清理 PATH/Path/path 重复键（每条 PowerShell 都是独立会话，必须先清，
-#    否则 Start-Process 报「已添加相同键」）
-[System.Environment]::SetEnvironmentVariable('PATH', $null)
-[System.Environment]::SetEnvironmentVariable('path', $null)
-[System.Environment]::SetEnvironmentVariable('Path', 'C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts;C:\Windows\system32;C:\Windows')
+# 1) 进程内清理 PATH（仅当前进程生效，不写入用户环境变量，避免污染全局 PATH）
+$env:PATH = 'C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts;C:\Windows\system32;C:\Windows'
 
 # 2) 若 5000 端口已被占用（旧的 Flask 没关），先停掉，避免重复进程
 try {
@@ -49,4 +46,5 @@ try {
 }
 
 Write-Host ""
-Read-Host "按回车退出"
+Write-Host "[*] 启动完成，Flask 已在后台运行（窗口可关闭）。"
+Start-Sleep -Seconds 2
