@@ -134,7 +134,7 @@
     <span class="ck-price" id="bondPrice">{{ '%.2f'|format(data.bond_price) if data.bond_price is not none else '—' }}</span>
     <span class="pct {{ 'up' if (data.bond_pct is not none and data.bond_pct > 0) else ('down' if (data.bond_pct is not none and data.bond_pct < 0) else 'flat') }}" id="bondPct">{% if data.bond_pct is not none %}{{ '+' if data.bond_pct > 0 else '' }}{{ '%.2f'|format(data.bond_pct) }}%{% else %}—{% endif %}</span>
     <div class="ck-actions">
-      <button class="ck-btn {{ 'watched' if watched }}" id="watchBtn" onclick="toggleWatch()">{{ '✓ 已关注' if watched else '★ 加入关注' }}</button>
+      {% if admin %}<button class="ck-btn {{ 'watched' if watched }}" id="watchBtn" onclick="toggleWatch()">{{ '✓ 已关注' if watched else '★ 加入关注' }}</button>{% endif %}
       <button class="ck-btn {{ 'in-compare' if in_compare }}" id="cmpBtn" onclick="toggleCompare()">{{ '✓ 对比中' if in_compare else '＋ 对比' }}</button>
       <a class="ck-btn" href="{{ url_for('bond_detail', code=code) }}">← 返回完整资料</a>
       {% if not data.is_delisted %}<button class="ck-btn" id="refreshBtn" onclick="refreshRealtime()">🔄 刷新实时行情</button>{% endif %}
@@ -274,7 +274,8 @@
     </div>
   </div>
 
-  <!-- ===== 我的决策（个人操作，沉淀判断）===== -->
+  <!-- ===== 我的决策（个人操作，仅管理员可见，沉淀判断）===== -->
+  {% if admin %}
   <div class="decision-card">
     <div class="dh">📌 我的决策
       {% if decision %}
@@ -297,6 +298,7 @@
       {% endfor %}
     </div>
   </div>
+  {% endif %}
 
   <p class="note">
     本页为<b>诊断结论页</b>：综合评分由债性安全、股性弹性、条款博弈、信用风险四部分加权生成，风险/机会清单与操作建议均由指标自动推导。

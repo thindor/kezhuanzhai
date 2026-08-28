@@ -299,6 +299,12 @@ def is_admin():
     return session.get("admin") is True
 
 
+@app.context_processor
+def _inject_admin():
+    """让所有模板（含 _nav.html）都能用 {{ admin }} 判断管理员登录态。"""
+    return {"admin": is_admin()}
+
+
 def _is_bot():
     """粗略判断搜索引擎爬虫，避免污染『最近检索』列表。"""
     ua = (request.user_agent.string or "").lower()
@@ -1262,6 +1268,8 @@ def bond_checkup(code):
 # ===================== 个人操作：关注 / 决策 / 对比 =====================
 @app.route("/api/watch/<code>", methods=["POST"])
 def api_watch(code):
+    if not is_admin():
+        return jsonify({"ok": False, "message": "请先登录管理员账号"}), 401
     real = resolve_query(code)
     if not real:
         return jsonify({"ok": False, "message": "未找到该转债"}), 404
@@ -1278,6 +1286,8 @@ def api_watch(code):
 
 @app.route("/api/decision/<code>", methods=["POST"])
 def api_decision(code):
+    if not is_admin():
+        return jsonify({"ok": False, "message": "请先登录管理员账号"}), 401
     real = resolve_query(code)
     if not real:
         return jsonify({"ok": False, "message": "未找到该转债"}), 404
@@ -1299,7 +1309,9 @@ def api_decision(code):
 
 @app.route("/watchlist")
 def watchlist_page():
-    """我的关注：概览 + 一键看诊断。"""
+    """我的关注：概览 + 一键看诊断。仅管理员可见。"""
+    if not is_admin():
+        return redirect(url_for("admin_login"))
     items = db.list_watch()
     rows = []
     for it in items:

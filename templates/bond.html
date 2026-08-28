@@ -73,7 +73,7 @@
     <h2>{{ bond.bond_name or '未知转债' }} <span class="code">{{ code }}</span>{% if bond.is_delisted %} <span class="delist-badge">已退市</span>{% endif %} <a class="checkup-link" href="{{ url_for('bond_checkup', code=code) }}">🩺 转债体检卡</a></h2>
     <p class="sub">正股：{{ bond.stock_name or '-' }}（{{ bond.stock_code or '-' }}）· 评级：{{ bond.rating or '-' }} · 数据来源：{{ bond.data_source or '东方财富' }}</p>
     <div class="act-bar">
-      <button class="act-btn {{ 'watched' if watched }}" id="watchBtn" onclick="toggleWatch()">{{ '✓ 已关注' if watched else '★ 加入关注' }}</button>
+      {% if admin %}<button class="act-btn {{ 'watched' if watched }}" id="watchBtn" onclick="toggleWatch()">{{ '✓ 已关注' if watched else '★ 加入关注' }}</button>{% endif %}
       <button class="act-btn {{ 'in-compare' if in_compare }}" id="cmpBtn" onclick="toggleCompare()">{{ '✓ 对比中' if in_compare else '＋ 对比' }}</button>
     </div>
   </div>
@@ -282,7 +282,8 @@
     </div>
   </section>
 
-  <!-- ===== 我的决策（个人操作，沉淀判断）===== -->
+  <!-- ===== 我的决策（个人操作，仅管理员可见，沉淀判断）===== -->
+  {% if admin %}
   <div class="decision-card">
     <div class="dh">📌 我的决策
       {% if decision %}
@@ -305,6 +306,7 @@
       {% endfor %}
     </div>
   </div>
+  {% endif %}
 </div>
   <script>
   // 退市债历史数据已冻结，不提供更新按钮（updateBar 不渲染）

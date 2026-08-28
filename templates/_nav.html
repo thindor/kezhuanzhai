@@ -14,7 +14,7 @@
     <a href="/double-low" class="{{ 'active' if request.path.startswith('/double-low') }}">双低策略</a>
     <a href="/new-bonds" class="{{ 'active' if request.path.startswith('/new-bonds') }}">新发转债</a>
     <a href="/xiaopanzhai" class="{{ 'active' if request.path.startswith('/xiaopanzhai') }}">小盘债</a>
-    <a href="/watchlist" class="{{ 'active' if request.path.startswith('/watchlist') }}">我的关注</a>
+    {% if admin %}<a href="/watchlist" class="{{ 'active' if request.path.startswith('/watchlist') }}">我的关注</a>{% endif %}
     <a href="/admin" class="{{ 'active' if request.path.startswith('/admin') }}">管理后台</a>
   </nav>
   <form class="nav-search" onsubmit="return false;">
