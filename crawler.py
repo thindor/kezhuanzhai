@@ -22,7 +22,7 @@ from config import EM_BASE, EM_HEADERS, THS_BASE
 from db import get_conn, upsert_bond, delete_holders, insert_holders, compute_delist, \
     get_bonds_with_down_revise, get_active_trading_bonds, upsert_daily_close, get_daily_close, \
     get_bond, get_latest_quotes, save_double_low_snapshot, get_latest_double_low, get_double_low_change, _now_str, \
-    get_redeemed_bond_codes
+    get_redeemed_bond_codes, get_periods_info
 
 # akshare 作为可转债事件（强赎/不强赎/下修）的兜底信息源（集思录接口在本机可用）。
 # 导入失败时降级为空实现，不影响其它爬虫。
@@ -403,6 +403,126 @@ def crawl_bond(code, use_ths=True):
         "holders": len(holder_rows),
         "message": "成功抓取 %d 个报告期、共 %d 条持有人记录" % (len(by_period), len(holder_rows)),
     }
+
+
+def expected_report_period(dt=None):
+    """返回当前应已披露的定期报告期（'YYYY-MM-DD'）。
+
+    取离今天最近、且披露截止日（季末 + 约 30 天宽限）已过的报告期：
+      - 中报 06-30  ：宽限至 08-01 起预期（截止 08-31，多数公司已披露）
+      - 一季报 03-31：宽限至 05-01 起预期（截止 04-30）
+      - 年报 12-31  ：宽限至次年 02-01 起预期（截止次年 04-30）
+      - 三季报 09-30：宽限至 11-01 起预期（截止 10-31）
+    options 已按时间倒序，第一个命中窗口的即「最新应披露期」。
+    这样在中报季(8月)会预期 2026-06-30，触发滞后债增量重抓；数据未出者靠每日重试自愈。
+    """
+    d = dt or datetime.now()
+    y, m, day = d.year, d.month, d.day
+    options = [
+        ((y, 9, 30), (11, 1)),     # 三季报
+        ((y, 6, 30), (8, 1)),      # 中报
+        ((y, 3, 31), (5, 1)),      # 一季报
+        ((y - 1, 12, 31), (2, 1)),  # 年报（次年 2 月起）
+    ]
+    best = None
+    for period, (em, ed) in options:
+        if (m, day) >= (em, ed):
+            best = period
+            break
+    if best is None:
+        best = (y - 1, 9, 30)  # 年初未到 2/1，退而求其次看上年三季报
+    return "%04d-%02d-%02d" % best
+
+
+def refresh_holders_for_bond(code, use_ths=False):
+    """仅刷新一只转债的十大持有人（不碰行情/基础，用于批量增量更新）。
+
+    与 crawl_bond 的区别：不回写 bonds 现价/不补历史行情，只 delete+insert holders。
+    若东方财富返回的最新报告期 <= 库内最新期，视为无变化直接跳过，避免无谓写库与请求。
+    返回 summary dict（含 changed / latest 字段，供批量统计）。
+    """
+    core = re.sub(r"\.(SZ|SH)$", "", (code or "").strip().upper())
+    if not re.fullmatch(r"\d{6}", core):
+        return {"ok": False, "bond_code": code, "message": "转债代码格式不正确"}
+    secucode = _secucode(core)
+    holders_raw = fetch_holders(secucode)
+    if not holders_raw:
+        return {"ok": False, "bond_code": core, "message": "未获取到十大持有人数据", "skipped": True}
+    by_period = defaultdict(list)
+    for h in holders_raw:
+        by_period[h["report_period"]].append(h)
+    max_period = max(by_period.keys())
+    # 库内当前最新期
+    pinfo = get_periods_info(core)
+    db_latest = pinfo[0]["period"] if pinfo else ""
+    if max_period <= db_latest:
+        return {"ok": True, "bond_code": core, "changed": False,
+                "message": "已是最新(%s)，跳过" % db_latest}
+    # 仅最新一期做同花顺性质校正（best-effort）；批量时关闭以免触发限流/封禁
+    nat_map = _ths_nature_map(core) if use_ths else {}
+    now = _now()
+    holder_rows = []
+    for period, items in by_period.items():
+        items_sorted = sorted(items, key=lambda x: x["hold_amount"], reverse=True)[:10]
+        for i, it in enumerate(items_sorted, 1):
+            name = it["holder_name"]
+            nature = nat_map.get(name) or classify_nature(name)
+            holder_rows.append({
+                "bond_code": core,
+                "report_period": period,
+                "rank": i,
+                "holder_name": name,
+                "holder_nature": nature,
+                "is_natural": 1 if nature == "个人" else 0,
+                "hold_amount": round(it["hold_amount"], 2),
+                "hold_ratio": it["hold_ratio"],
+                "data_source": "东方财富数据中心",
+                "fetched_at": now,
+            })
+    delete_holders(core)
+    insert_holders(holder_rows)
+    return {"ok": True, "bond_code": core, "changed": True, "latest": max_period,
+            "message": "已更新至 %s（%d 期/%d 条）" % (max_period, len(by_period), len(holder_rows))}
+
+
+def refresh_holders_stale(limit=None, sleep_sec=0.3):
+    """增量刷新持有人：仅对「最新报告期 < 当前应披露期」的活跃（未退市）转债重抓。
+
+    - 自动跳过已退市债（与『退市债不再更新』口径一致）。
+    - limit：单次最多处理几只（用于每日管道限速，避免单轮爆破东方财富）；None=不限制（手动全量）。
+    - 数据未出的债（如中报尚未在东方财富放出）本次 latest 仍 < expected，下一轮继续重试直至补齐。
+    返回汇总 dict。
+    """
+    expected = expected_report_period()
+    bonds = get_active_trading_bonds()  # 仅未退市
+    target = []
+    for b in bonds:
+        code = b["bond_code"]
+        pinfo = get_periods_info(code)
+        latest = pinfo[0]["period"] if pinfo else ""
+        if latest < expected:
+            target.append((code, latest))
+    if limit:
+        target = target[:limit]
+    done = changed = skipped = 0
+    for code, latest in target:
+        try:
+            res = refresh_holders_for_bond(code, use_ths=False)
+            if res.get("changed"):
+                changed += 1
+                print("[holders] %s -> %s" % (code, res.get("message")))
+            else:
+                skipped += 1
+        except Exception as e:
+            skipped += 1
+            print("[holders] %s 失败: %s" % (code, e))
+        done += 1
+        if sleep_sec:
+            time.sleep(sleep_sec)
+    print("[holders] 完成：expected=%s 待处理=%d 实际=%d 更新=%d 跳过=%d"
+          % (expected, len(target) if limit is None else limit, done, changed, skipped))
+    return {"expected": expected, "target": len(target), "done": done,
+            "changed": changed, "skipped": skipped}
 
 
 # ---------------- 历史下修记录（集思录 adj_logs，免费匿名） ----------------
