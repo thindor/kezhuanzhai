@@ -12,7 +12,7 @@
   7) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
   8) crawler.collect_stock_finance()        正股财务指标（东财 F10 全量未退市债正股：总资产/总负债/有息负债率/总股本），
                                             供「全部转债」高级筛选的 资产负债率/有息负债率/转债占比 使用（7 天守卫，财务为季更）
-  9) verify_integrity()                     关键数据一致性校验（双低快照无未上市债/等权指数 chg% 与重算偏差 < 0.5%）；
+  9) verify_integrity()                     关键数据一致性校验（双低快照无未上市债/等权指数 chg% 与重算偏差 < 0.1%）；
                                             失败仅写警告日志，不阻塞主流程（双低未上市债/等权指数算法均为高风险回归点）
 
   注：十大持有人随定期报告（中报/年报等）变化，更新频率低，不进每日自动管道，
@@ -122,7 +122,7 @@ def _step_verify_integrity():
     """关键数据一致性校验（回归防护）：
 
     - 双低快照：最新一周前 N 只必须每只 daily_close.bond_close 非空（防未上市债回归）；
-    - 等权指数：最新一日 chg% 与「各债 chg% 等权平均重算」偏差 < 0.5 个百分点（防算法回归）。
+    - 等权指数：最新一日 chg% 与「各债 chg% 等权平均重算」偏差 < 0.1 个百分点（防算法回归；0.5pp 抓不到本次真实回归 0.39pp，故收紧）。
 
     返回可读报告；任意一项失败抛 RuntimeError 让 _run_step 标 failed（不影响主流程 ok_all）。
     """
@@ -130,7 +130,7 @@ def _step_verify_integrity():
     conn = db.get_conn()
     try:
         dl_ok, dl_failures, dl_stats = verify_double_low_snapshot(conn)
-        ew_ok, ew_mismatch, ew_stats = verify_equal_weight_index(conn, tolerance=0.005)
+        ew_ok, ew_mismatch, ew_stats = verify_equal_weight_index(conn, tolerance=0.001)
     finally:
         conn.close()
     parts = []
