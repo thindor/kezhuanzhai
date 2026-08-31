@@ -75,7 +75,8 @@ cb_holder_system/
 ├── seed_bonds.py         # 播种：全市场转债基础资料入 bonds 表
 ├── seed_down_revise.py   # 播种：批量采集全市场历史下修记录
 ├── crawl_all.py          # 全量十大持有人抓取（限速 / 断点续跑 / 跳过冻结）
-├── collect_daily.py      # 每日采集总入口（行情 + 基础 + 小盘债 + 等权指数）
+├── collect_daily.py      # 每日采集总入口（行情 + 基础 + 小盘债 + 等权指数 + 第⑨步自检）
+├── verify_integrity.py   # 数据质量自检（双低快照无未上市债 / 等权指数 chg% 自洽），collect_daily 第⑨步调用
 ├── fetch_daily.py        # 每日收盘价采集（collect_daily 内部调用）
 ├── fetch_announcements.py# 每日公告采集（强赎/不强赎/下修/即将发行）
 ├── rotate_double_low.py  # 双低策略每周轮动
@@ -148,6 +149,35 @@ python crawl_all.py           # 全量十大持有人（最慢，建议后台 no
 5. **端口**：Gunicorn 监听 `127.0.0.1:8000`，由 Nginx 反代；**外网只开 80 / 443，8000 不对外**。
    开发模式 `python app.py` 监听 `5000`。
 6. **数据库备份**：SQLite 单文件 `cb_holders.db`，定时 `cp` 备份即可（见各部署文档的备份步骤）。
+
+## 数据质量自检（verify_integrity.py）
+
+`collect_daily.py` 每日 16:30 跑完核心 8 步后，第 ⑨ 步会执行 `verify_integrity.py` 的
+一致性校验，防止历史 bug 回归。校验**不依赖集思录外部源**（避免登录 / 反爬脆弱依赖），
+改用「内部自洽」方式：
+
+1. **双低快照无未上市债**：最新一周 `double_low_log` 前 20 只，每只必须
+   `daily_close.bond_close` 有数据。未上市债（如 `current_price=100` 占位面值、
+   `bond_close` 全空）曾被误轮动调入，此校验防回归。
+2. **等权指数 chg% 自洽**：最新一日 `equal_weight_index.index_value` 的环比，与
+   「各债 chg% 等权平均」独立重算值偏差 < 0.1pp。旧实现用「均价环比」被价格加权污染，
+   算成 +0.32% 而集思录为 -0.07%（差 0.39pp）；阈值收紧到 0.1pp 才能抓到这类回归。
+
+第 ⑨ 步失败仅写 `collect_steps` warning（标记「⚠ 一致性校验失败」），**不阻塞**
+核心 `ok_all` 判定——核心数据已成功，校验失败只是提醒该排查。可在
+管理后台 `/admin/collect-logs` 查看。
+
+手动运行：
+
+```bash
+python verify_integrity.py                   # 默认输出 + 退出码（非零=失败，适合 cron 报警）
+python verify_integrity.py --json            # JSON 格式，给程序消费
+python verify_integrity.py --tolerance 0.005  # 自定义等权指数偏差阈值（默认 0.001 = 0.1pp）
+```
+
+开发态更严的护栏：`db.compute_equal_weight_index(_self_check=True)`（或设环境变量
+`KZZ_SELF_CHECK=1`）会在写库时 `assert`「index_value 环比」与「等权 chg%」一致，
+一旦被改回均价环比会立即抛错，配合 CI / 单测使用。
 
 ## 配置说明（`config.py` + `.env`）
 

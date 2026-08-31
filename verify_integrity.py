@@ -6,7 +6,7 @@
      daily_close.bond_close 非 None 数据——防止未上市/缺数据债被错误调入（2026-08-31
      真实发生过：123284/123283/123282 以「调入价 100.00」进了轮动）。
   2) **等权指数算法**：最新一日的 chg% 必须与「各债 chg% 等权平均重算」一致，
-     偏差 > 0.5% 则报警——防止 compute_equal_weight_index 在未来重写时被均价环比
+     偏差 > 0.1% 则报警——防止 compute_equal_weight_index 在未来重写时被均价环比
      等「价格加权污染」错误实现回退（2026-08-31 真实发生过：旧版用均价环比，
      8/28→8/31 算出 +0.32%，集思录 -0.07%，正确口径 -0.073%）。
 
@@ -21,7 +21,7 @@
   python verify_integrity.py                    # 默认校验 + 退出码
   python verify_integrity.py --quiet            # 只输出失败项
   python verify_integrity.py --json             # 输出 JSON 给程序消费
-  python verify_integrity.py --tolerance 0.005  # 等权指数偏差阈值（默认 0.5%）
+  python verify_integrity.py --tolerance 0.001  # 等权指数偏差阈值（默认 0.1%）
 """
 import argparse
 import json
@@ -80,7 +80,7 @@ def verify_double_low_snapshot(conn, limit=20):
     }
 
 
-def verify_equal_weight_index(conn, tolerance=0.005):
+def verify_equal_weight_index(conn, tolerance=0.001):
     """校验等权指数最新一日 chg% 与「各债 chg% 等权平均重算」一致性。
 
     重算口径：
@@ -137,7 +137,7 @@ def verify_equal_weight_index(conn, tolerance=0.005):
     stored_pct = ((stored_idx / prev_idx) - 1.0) * 100.0 if prev_idx else 0.0
 
     diff_pct = abs(recomputed_pct - stored_pct)
-    ok = diff_pct < tolerance * 100.0  # tolerance 是 0.005=0.5%，对应差值 < 0.5 个百分点
+    ok = diff_pct < tolerance * 100.0  # tolerance 是 0.001=0.1%，对应差值 < 0.1 个百分点
     return ok, {
         "latest_td": latest_td,
         "prev_td": prev_td,
@@ -161,8 +161,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quiet", action="store_true", help="只输出失败项")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
-    ap.add_argument("--tolerance", type=float, default=0.005,
-                    help="等权指数 chg% 偏差阈值（默认 0.005 = 0.5 个百分点）")
+    ap.add_argument("--tolerance", type=float, default=0.001,
+                    help="等权指数 chg% 偏差阈值（默认 0.001 = 0.1 个百分点）")
     ap.add_argument("--double-low-limit", type=int, default=20)
     args = ap.parse_args()
 

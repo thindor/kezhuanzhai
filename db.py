@@ -1846,7 +1846,7 @@ def get_price_trend(days=365, min_sample=50):
 
 # ============ 可转债等权指数（价格等权，全样本日频） ============
 
-def compute_equal_weight_index(min_sample=50, base_value=1000.0):
+def compute_equal_weight_index(min_sample=50, base_value=1000.0, _self_check=False):
     """计算可转债等权指数并写库 equal_weight_index（幂等，可每日重算全量）。
 
     口径（对标集思录「转债等权指数」编制规则）：
@@ -1934,10 +1934,23 @@ def compute_equal_weight_index(min_sample=50, base_value=1000.0):
     _recent_avg = (sum(_recent) / len(_recent)) if _recent else 0.0
     conn = get_conn()
     cur = conn.cursor()
+    import os as _os
+    _check_on = _self_check or _os.environ.get("KZZ_SELF_CHECK") == "1"
+    _prev_index = None
     for td in sorted_stat_days:
         st = day_stat[td]
         if td == _latest_td and (_is_intraday or (_recent_avg and (st["sample_n"] < 200 or st["sample_n"] < _recent_avg * 0.7))):
             continue
+        # 开发态自检：index_value 必须是由「各债 chg% 等权平均」链乘驱动；
+        # 若有人把 index_value 改回「均价环比」(avg_today/avg_prev)，这里会系统性
+        # 偏离 return(等权 chg%)，断言失败 → 开发/CI 立即抛错（防 2026-08-31 同类 bug 回归）。
+        # 正常实现下 index_value 本就是 return 链乘，index_value 环比 == return，差恒为 0，不会误伤。
+        if _check_on and _prev_index is not None and st["return"] is not None:
+            _implied = st["index_value"] / _prev_index - 1.0
+            assert abs(_implied - st["return"]) < 0.001, (
+                "等权指数自洽性失败 @%s: index_value 环比 %.4f%% 与 等权 chg%% %.4f%% "
+                "偏差 > 0.1pp，疑似被改回均价环比(价格加权污染)" % (td, _implied * 100, st["return"] * 100)
+            )
         cur.execute(
             "INSERT OR REPLACE INTO equal_weight_index"
             "(trade_date, avg_price, median_price, index_value, sample_n, updated_at) "
@@ -1945,6 +1958,7 @@ def compute_equal_weight_index(min_sample=50, base_value=1000.0):
             (td, round(st["avg_price"], 2), round(st["median_price"], 2),
              st["index_value"], st["sample_n"], now)
         )
+        _prev_index = st["index_value"]
     conn.commit()
     conn.close()
     return get_equal_weight_latest()
