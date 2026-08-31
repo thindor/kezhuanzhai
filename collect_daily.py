@@ -12,6 +12,8 @@
   7) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
   8) crawler.collect_stock_finance()        正股财务指标（东财 F10 全量未退市债正股：总资产/总负债/有息负债率/总股本），
                                             供「全部转债」高级筛选的 资产负债率/有息负债率/转债占比 使用（7 天守卫，财务为季更）
+  9) verify_integrity()                     关键数据一致性校验（双低快照无未上市债/等权指数 chg% 与重算偏差 < 0.5%）；
+                                            失败仅写警告日志，不阻塞主流程（双低未上市债/等权指数算法均为高风险回归点）
 
   注：十大持有人随定期报告（中报/年报等）变化，更新频率低，不进每日自动管道，
       由管理后台「持有人信息采集」按钮手动触发（见 refresh_holders.py / /admin/collect-holders）。
@@ -44,6 +46,7 @@ import crawler
 import seed_bonds
 import mini_bond
 import checkup
+import verify_integrity
 
 
 def _is_trading_day(dt=None):
@@ -115,6 +118,39 @@ def _step_detect_delist():
     return "新标记退市 %d 只" % n
 
 
+def _step_verify_integrity():
+    """关键数据一致性校验（回归防护）：
+
+    - 双低快照：最新一周前 N 只必须每只 daily_close.bond_close 非空（防未上市债回归）；
+    - 等权指数：最新一日 chg% 与「各债 chg% 等权平均重算」偏差 < 0.5 个百分点（防算法回归）。
+
+    返回可读报告；任意一项失败抛 RuntimeError 让 _run_step 标 failed（不影响主流程 ok_all）。
+    """
+    from verify_integrity import verify_double_low_snapshot, verify_equal_weight_index
+    conn = db.get_conn()
+    try:
+        dl_ok, dl_failures, dl_stats = verify_double_low_snapshot(conn)
+        ew_ok, ew_mismatch, ew_stats = verify_equal_weight_index(conn, tolerance=0.005)
+    finally:
+        conn.close()
+    parts = []
+    if dl_ok:
+        parts.append("双低快照: %d 只全部 PASS" % dl_stats.get("checked", 0))
+    else:
+        for f in dl_failures:
+            parts.append("双低失败: rank %d %s %s bond_price=%s" % (
+                f["rank"], f["bond_code"], f["bond_name"], f["bond_price"]))
+    if "stored_pct" in ew_stats:
+        parts.append("等权指数: stored=%s%% recomputed=%s%% diff=%s pt (n=%d)" % (
+            ew_stats["stored_pct"], ew_stats["recomputed_pct"], ew_stats["diff_pts"], ew_stats["sample_n"]))
+    elif "reason" in ew_stats:
+        parts.append("等权指数: " + ew_stats["reason"])
+    summary = " | ".join(parts)
+    if not (dl_ok and ew_ok):
+        raise RuntimeError("一致性校验失败：" + summary)
+    return summary
+
+
 def main():
     # 解析参数
     force = "--force" in sys.argv
@@ -138,7 +174,7 @@ def main():
     print("[collect] 每日采集总入口启动 @ %s  trigger=%s run_id=%s"
           % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), trigger, run_id))
 
-    # 顺序：行情 -> 基础数据 -> 退市检测 -> 小盘债 -> 剩余规模 -> 到期赎回价 -> 当前转股价
+    # 顺序：行情 -> 基础数据 -> 退市检测 -> 小盘债 -> 剩余规模 -> 到期赎回价 -> 当前转股价 -> 财务 -> 一致性校验
     steps = [
         ("行情 daily_close", lambda: crawler.fetch_daily_all()),
         ("基础数据 seed_bonds", seed_bonds.main),
@@ -148,24 +184,30 @@ def main():
         ("到期赎回价 redeem_price", checkup.refresh_redeem_prices),
         ("当前转股价 transfer_price", checkup.refresh_transfer_prices),
         ("正股财务 stock_finance", lambda: _step_stock_finance(force)),
+        ("一致性校验 verify_integrity", _step_verify_integrity),
     ]
     results = []
     for i, (name, fn) in enumerate(steps, 1):
         results.append(_run_step(run_id, i, name, fn))
     r1, r2 = results[0], results[1]
 
-    # 汇总判定
-    ok_all = all(results)
-    # 关键步骤（行情/基础）成功即视为「基本成功」；二者之一失败则整体失败
+    # 汇总判定：核心步骤（行情/基础）成功 + 非阻塞步骤可失败。
+    # 一致性校验（第 9 步）失败仅记 warning，不影响 success/failed；它本身有退出码，
+    # 写 collect_steps 即可被管理后台看到。
+    core_results = results[:8]
+    verify_result = results[8]
+    ok_all = all(core_results)
     if ok_all:
         final_status = "success"
     elif r1 and r2:
         final_status = "partial"   # 次要步骤失败，但核心数据可用
     else:
         final_status = "failed"
-    notes = "行情=%s 基础=%s 退市检测=%s 小盘=%s 剩余规模=%s 赎回价=%s 转股价=%s 财务=%s，总耗时 %.1fs" % (
-        results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[7],
-        time.time() - t_all)
+    notes = ("行情=%s 基础=%s 退市检测=%s 小盘=%s 剩余规模=%s 赎回价=%s 转股价=%s 财务=%s 一致性=%s，总耗时 %.1fs" % (
+        results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[7], results[8],
+        time.time() - t_all))
+    if not verify_result:
+        notes += " ⚠ 一致性校验失败：双低快照或等权指数回归，请查管理后台/管理后台/collect-logs"
     db.finish_collect_run(run_id, final_status, notes=notes)
     print("\n[collect] 运行结束 run_id=%s status=%s：%s" % (run_id, final_status, notes))
 
