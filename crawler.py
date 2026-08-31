@@ -22,7 +22,7 @@ from config import EM_BASE, EM_HEADERS, THS_BASE
 from db import get_conn, upsert_bond, delete_holders, insert_holders, compute_delist, \
     get_bonds_with_down_revise, get_active_trading_bonds, upsert_daily_close, get_daily_close, \
     get_bond, get_latest_quotes, save_double_low_snapshot, get_latest_double_low, get_double_low_change, _now_str, \
-    get_redeemed_bond_codes, get_periods_info
+    get_redeemed_bond_codes, get_periods_info, save_stock_finance
 
 # akshare 作为可转债事件（强赎/不强赎/下修）的兜底信息源（集思录接口在本机可用）。
 # 导入失败时降级为空实现，不影响其它爬虫。
@@ -1296,20 +1296,16 @@ def compute_double_low_list(topn=20):
         if not g:
             continue
         q = get_latest_quotes(code)
-        # 转债价
+        # 转债价：仅采用 daily_close 最新收盘价。
+        # ⚠️ 严格禁止从 bonds.current_price 兜底——新债/未上市债的 current_price 恒为 100.0
+        # （占位面值），用它兜底会让未上市债以 100 元 + 任意溢价率被算进双低，
+        # 进而被轮动误调入；正确做法是直接 skip（无成交价 = 不能买卖 = 不能进轮动）。
         bp = None
         try:
             if q.get("bond_close") is not None:
                 bp = float(q["bond_close"])
         except (TypeError, ValueError):
             bp = None
-        if not bp or bp <= 0:
-            cp = g.get("current_price")
-            try:
-                if cp and float(cp) > 0:
-                    bp = float(cp)
-            except (TypeError, ValueError):
-                bp = None
         if not bp or bp <= 0:
             continue
         # 正股价
@@ -1368,3 +1364,92 @@ def rotate_double_low():
         "entered": entered,
         "exited": exited,
     }
+
+
+# ============ 正股财务指标采集（高级筛选数据源） ============
+
+def _secucode_stock(code):
+    """正股 6 位代码 -> 带交易所后缀的 SECUCODE（6/9/5->.SH，其余->.SZ）。"""
+    code = str(code or "").strip()
+    if code.endswith((".SH", ".SZ", ".BJ")):
+        return code
+    if code[:1] in ("6", "9", "5"):
+        return code + ".SH"
+    return code + ".SZ"
+
+
+def _to_float(v):
+    try:
+        if v is None or v == "":
+            return None
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def collect_stock_finance():
+    """东方财富 F10 主要财务指标 -> stock_finance 表（全量未退市债对应正股）。
+
+    采集：总资产 / 总负债 / 有息负债率 / 总股本（每只是一只正股取最新一期报告）。
+    资产负债率在本地由 总负债/总资产 现算（东财不直接给百分比，避免口径漂移）；
+    有息负债率东财已为百分比（如 22.22 即 22.22%）。
+    覆盖约 300 只正股，单次批量请求完成。返回写入条数；异常静默返回 0。"""
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT DISTINCT stock_code FROM bonds "
+            "WHERE stock_code IS NOT NULL AND TRIM(stock_code)<>'' "
+            "AND COALESCE(is_delisted,0)=0").fetchall()
+        conn.close()
+        plain = [r[0] for r in rows]
+        if not plain:
+            return 0
+        # 正股代码 -> SECUCODE 映射（去重）
+        sc2plain = {}
+        for c in plain:
+            sc2plain[_secucode_stock(c)] = c
+        secucodes = list(sc2plain.keys())
+
+        out = []
+        for i in range(0, len(secucodes), 200):
+            batch = secucodes[i:i + 200]
+            f = ('(SECUCODE in (%s)) AND (REPORT_DATE >= \'2024-01-01\')'
+                 % ",".join('"%s"' % s for s in batch))
+            params = {
+                "reportName": "RPT_F10_FINANCE_MAINFINADATA",
+                "columns": "SECUCODE,SECURITY_CODE,REPORT_DATE,REPORT_DATE_NAME,"
+                           "TOTAL_ASSETS_PK,LIABILITY,INTEREST_DEBT_RATIO,TOTAL_SHARE",
+                "filter": f,
+                "pageNumber": "1", "pageSize": "3000",
+                "sortTypes": "-1", "sortColumns": "REPORT_DATE",
+                "source": "HSF10", "client": "PC",
+            }
+            r = requests.get(EM_BASE, params=params, headers=EM_HEADERS, timeout=30)
+            d = r.json()
+            data = (d.get("result") or {}).get("data") or []
+            seen = set()
+            for row in data:
+                sc = row.get("SECUCODE")
+                if not sc or sc in seen:
+                    continue
+                seen.add(sc)  # sortTypes=-1 已按报告期倒序，首见即最新一期
+                ta = _to_float(row.get("TOTAL_ASSETS_PK"))
+                li = _to_float(row.get("LIABILITY"))
+                idr = _to_float(row.get("INTEREST_DEBT_RATIO"))
+                ts = _to_float(row.get("TOTAL_SHARE"))
+                dr = round(li / ta * 100, 2) if (ta and li is not None) else None
+                out.append({
+                    "stock_code": sc2plain.get(sc, sc),
+                    "report_date": row.get("REPORT_DATE"),
+                    "report_label": row.get("REPORT_DATE_NAME"),
+                    "total_assets": ta,
+                    "total_liability": li,
+                    "debt_ratio": dr,
+                    "interest_debt_ratio": idr,
+                    "total_share": ts,
+                })
+        return save_stock_finance(out)
+    except Exception as e:
+        print("[collect_stock_finance] ERR", type(e).__name__, str(e)[:200])
+        return 0
+

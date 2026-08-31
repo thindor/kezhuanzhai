@@ -192,6 +192,21 @@ def init_db():
         created_at  TEXT
     )""")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_decisions_bond ON decisions(bond_code)")
+    # 正股财务指标（东方财富 F10 主要指标，季度更新）。
+    # 供「全部转债」高级筛选使用：资产负债率、有息负债率、总股本（算转债占比的分母）。
+    # 以 stock_code 为主键一只正股一行，只存最新一期报告。
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS stock_finance (
+        stock_code          TEXT PRIMARY KEY,
+        report_date         TEXT,
+        report_label        TEXT,
+        total_assets        REAL,
+        total_liability     REAL,
+        debt_ratio          REAL,
+        interest_debt_ratio REAL,
+        total_share         REAL,
+        updated_at          TEXT
+    )""")
     conn.commit()
     conn.close()
     # 启动即按到期日/摘牌日幂等回填退市标记（覆盖存量债券）
@@ -1365,7 +1380,14 @@ def get_daily_close(bond_code, days=250):
 
 
 def get_active_trading_bonds():
-    """返回仍在交易的转债（未退市且未到期），供每日采集与强赎预警使用。
+    """返回仍在交易的转债（未退市、未到期、已上市），供每日采集与双低轮动使用。
+
+    排除口径：
+      - is_delisted = 1（已退市）
+      - expire_date < 今天（已到期退市）
+      - listing_date > 今天（**尚未上市**，新债场景；新债的 current_price 恒为 100 占位，
+        不可纳入强赎/双低等需要真实成交的逻辑）
+
     返回 list[dict(bond_code, bond_name, stock_code, current_transfer_price, expire_date)]。
     """
     import datetime as _dt
@@ -1377,8 +1399,9 @@ def get_active_trading_bonds():
         FROM bonds
         WHERE COALESCE(is_delisted, 0) = 0
           AND (expire_date IS NULL OR expire_date >= ?)
+          AND (listing_date IS NULL OR listing_date <= ?)
         ORDER BY bond_code
-    """, (today,))
+    """, (today, today))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
@@ -1826,15 +1849,21 @@ def get_price_trend(days=365, min_sample=50):
 def compute_equal_weight_index(min_sample=50, base_value=1000.0):
     """计算可转债等权指数并写库 equal_weight_index（幂等，可每日重算全量）。
 
-    口径（与 get_price_trend 一致，对标集思录等权指数）：
-      - 数据源：daily_close JOIN bonds，过滤 bond_close 非空 + 未退市 + 非EB；
-      - 每个交易日算算术平均价 avg_price 与中位数 median_price，样本数 sample_n；
-      - 基期 BASE_AVG = 全历史中【最早一个 sample_n>=min_sample 的交易日】的 avg_price；
-      - 指数值 index_value = avg_price / BASE_AVG * base_value（首期 = 1000）。
+    口径（对标集思录「转债等权指数」编制规则）：
+      - 样本：daily_close JOIN bonds，过滤 bond_close 非空 + 未退市 + 非EB；
+      - 每日 return = Σ(c_today_i / c_prev_i - 1) / N
+            即「各债涨跌幅的算术平均」—— 等权纳入，每债权重相同；
+      - 起点指数 = base_value = 1000（即数据起点首日，之后每日 *= 1+return）；
+      - 每日 avg_price / median_price / sample_n 作为展示指标同步写入；
+      - 新债「上市次日才贡献 chg%」—— 当日 prev_prices 没有这只债，自动剔除
+        （等效集思录「上市第二个交易日加入」规则）。
 
-    说明：本地 daily_close 自 2026-08 起才有数据，无法回溯到集思录的 2017-12-29 基期，
-    因此采用「数据起点基期 = 1000」的自洽口径——走势形状与集思录一致，
-    但绝对点位因基期不同而不可直接比较。返回最新一行 dict 或 None。
+    注意：
+      1. 本地 daily_close 自 2026-08 起才有数据，无法回溯到集思录 2017-12-29 基期，
+         故采用「数据起点基期 = 1000」自洽口径——点位绝对值不可比较，但**每日涨跌幅
+         与集思录口径一致**。
+      2. 之前用「均价环比」(sum/N)_{t}/(sum/N)_{t-1} 是错误的（被「价格加权」污染），
+         现在改为「各债 chg% 等权平均」才与集思录一致。
     """
     import statistics as _st
     from collections import defaultdict
@@ -1842,48 +1871,79 @@ def compute_equal_weight_index(min_sample=50, base_value=1000.0):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT d.trade_date, d.bond_close FROM daily_close d "
+        "SELECT d.trade_date, d.bond_code, d.bond_close FROM daily_close d "
         "JOIN bonds b ON b.bond_code = d.bond_code "
         "WHERE d.bond_close IS NOT NULL "
         "AND COALESCE(b.is_delisted,0)=0 AND %s ORDER BY d.trade_date" % eb
     )
-    by_day = defaultdict(list)
-    for td, p in cur.fetchall():
-        by_day[td].append(p)
-    # 先汇总各达标交易日的均价/中位数，确定基期
-    day_stat = {}
-    for td, plist in by_day.items():
-        if len(plist) < min_sample:
+    rows = cur.fetchall()
+    conn.close()
+
+    # 按日期聚合 {trade_date: {bond_code: price}}
+    by_day = {}
+    for td, code, p in rows:
+        if td not in by_day:
+            by_day[td] = {}
+        by_day[td][code] = p
+
+    # 逐日推进：每日与「上一交易日」逐债对比算 chg%（新债首日不贡献，prev_prices 没有它）
+    sorted_days = sorted(by_day.keys())
+    day_stat = {}   # td -> dict(avg_price, median_price, sample_n, return, index_value)
+    prev_prices = None
+    idx_val = float(base_value)
+    for td in sorted_days:
+        prices = by_day[td]
+        n = len(prices)
+        if n < min_sample:
             continue
-        day_stat[td] = (sum(plist) / len(plist), _st.median(plist), len(plist))
+        avg_p = sum(prices.values()) / n
+        med_p = _st.median(prices.values())
+        # 各债 chg% 算术平均（新债自动不贡献）
+        ret = None
+        if prev_prices is not None:
+            chgs = []
+            for code, p in prices.items():
+                pp = prev_prices.get(code)
+                if pp and pp > 0:
+                    chgs.append(p / pp - 1.0)
+            if chgs:
+                ret = sum(chgs) / len(chgs)
+        if ret is not None:
+            idx_val = idx_val * (1.0 + ret)
+        day_stat[td] = {
+            "avg_price": avg_p,
+            "median_price": med_p,
+            "sample_n": n,
+            "return": ret,
+            "index_value": round(idx_val, 2),
+        }
+        prev_prices = prices
+
     if not day_stat:
-        conn.close()
         return None
-    base_date = min(day_stat.keys())
-    base_avg = day_stat[base_date][0]
+
+    # 盘中守卫 + 样本数守卫（与之前一致）
     now = _now_str()
     import datetime as _dtmod
-    _latest_td = max(day_stat.keys()) if day_stat else None
+    sorted_stat_days = sorted(day_stat.keys())
+    _latest_td = sorted_stat_days[-1]
     _today = _dtmod.date.today().strftime('%Y-%m-%d')
     _now_hm = _dtmod.datetime.now().strftime('%H:%M')
-    # 盘中（<16:00）手动采集到的「今日」为实时价、样本常不完整，不计入指数，
-    # 待收盘后(>=16:00)每日任务重算再写入；避免盘中快照污染涨跌幅。
     _is_intraday = (_latest_td == _today and _now_hm < '16:00')
-    # 防御：最新交易日若样本数显著低于近期均值，视为「盘中/不完整采集」，
-    # 跳过写入当日（不 REPLACE），保留上一完整交易日为指数最新日，避免半截
-    # 数据污染涨跌幅；补齐后再次重算即可正常写入。
-    _recent = [v[2] for k, v in day_stat.items() if k != _latest_td]
+    _recent = [day_stat[k]["sample_n"] for k in sorted_stat_days if k != _latest_td]
     _recent_avg = (sum(_recent) / len(_recent)) if _recent else 0.0
-    for td in sorted(day_stat.keys()):
-        avg_p, med_p, n = day_stat[td]
-        if td == _latest_td and (_is_intraday or (_recent_avg and (n < 200 or n < _recent_avg * 0.7))):
+    conn = get_conn()
+    cur = conn.cursor()
+    for td in sorted_stat_days:
+        st = day_stat[td]
+        if td == _latest_td and (_is_intraday or (_recent_avg and (st["sample_n"] < 200 or st["sample_n"] < _recent_avg * 0.7))):
             continue
-        idx_val = round(avg_p / base_avg * base_value, 2) if base_avg else None
         cur.execute(
             "INSERT OR REPLACE INTO equal_weight_index"
             "(trade_date, avg_price, median_price, index_value, sample_n, updated_at) "
             "VALUES(?,?,?,?,?,?)",
-            (td, round(avg_p, 2), round(med_p, 2), idx_val, n, now)
+            (td, round(st["avg_price"], 2), round(st["median_price"], 2),
+             st["index_value"], st["sample_n"], now)
         )
     conn.commit()
     conn.close()
@@ -2055,3 +2115,71 @@ def list_decisions(code):
 def latest_decision(code):
     rs = list_decisions(code)
     return rs[0] if rs else None
+
+
+# ---------------- 正股财务指标（高级筛选数据源） ----------------
+def save_stock_finance(rows):
+    """批量写入正股财务指标（一只正股一行，覆盖式更新）。
+
+    rows 元素字段：stock_code / report_date / report_label / total_assets /
+    total_liability / debt_ratio / interest_debt_ratio / total_share。
+    返回实际写入条数。
+    """
+    if not rows:
+        return 0
+    conn = get_conn(); cur = conn.cursor()
+    n = 0
+    for r in rows:
+        sc = (r.get("stock_code") or "").strip()
+        if not sc:
+            continue
+        cur.execute("""INSERT OR REPLACE INTO stock_finance
+            (stock_code, report_date, report_label, total_assets, total_liability,
+             debt_ratio, interest_debt_ratio, total_share, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (sc, r.get("report_date"), r.get("report_label"),
+                     r.get("total_assets"), r.get("total_liability"),
+                     r.get("debt_ratio"), r.get("interest_debt_ratio"),
+                     r.get("total_share"), _now_str()))
+        n += 1
+    conn.commit(); conn.close()
+    return n
+
+
+def get_stock_finance_map():
+    """返回 {stock_code: {...}} 全量正股财务指标（量小，一次读入做内存过滤）。"""
+    conn = get_conn(); conn.row_factory = sqlite3.Row; cur = conn.cursor()
+    try:
+        rows = cur.execute("SELECT * FROM stock_finance").fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    return {r["stock_code"]: dict(r) for r in rows}
+
+
+def get_stock_finance_updated_at():
+    """财务指标最近一次采集时间（无数据显示 None）。"""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        r = cur.execute("SELECT MAX(updated_at) FROM stock_finance").fetchone()
+    except Exception:
+        r = None
+    conn.close()
+    return (r[0] if r else None) or None
+
+
+def get_hist_low_map():
+    """{bond_code: 历史最低收盘价} —— 供「仅看历史新低」筛选。
+
+    取 daily_close 全历史最低 bond_close；无任何行情的债不出现在结果里
+    （高级筛选时按「无法判断」处理，不误判为新低）。
+    """
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        rows = cur.execute(
+            "SELECT bond_code, MIN(bond_close) AS lo FROM daily_close "
+            "WHERE bond_close IS NOT NULL AND bond_close > 0 GROUP BY bond_code").fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    return {r[0]: r[1] for r in rows if r[1]}

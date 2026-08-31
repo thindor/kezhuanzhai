@@ -10,6 +10,8 @@
   5) checkup.refresh_remaining_scales()        滚动补全剩余规模（集思录前30活跃债写入 bonds.remaining_scale）
   6) checkup.refresh_redeem_prices()        补全到期赎回价（东财全量基础解析写入 bonds.redeem_price）
   7) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
+  8) crawler.collect_stock_finance()        正股财务指标（东财 F10 全量未退市债正股：总资产/总负债/有息负债率/总股本），
+                                            供「全部转债」高级筛选的 资产负债率/有息负债率/转债占比 使用（7 天守卫，财务为季更）
 
   注：十大持有人随定期报告（中报/年报等）变化，更新频率低，不进每日自动管道，
       由管理后台「持有人信息采集」按钮手动触发（见 refresh_holders.py / /admin/collect-holders）。
@@ -83,6 +85,23 @@ def _run_step(run_id, step_no, step_name, fn):
         return False
 
 
+def _step_stock_finance(force):
+    """正股财务指标（高级筛选数据源）：东财 F10 全量未退市债正股。
+
+    财务数据为季度更新，加 7 天守卫避免每日重复打东财；--force 可强制重采。"""
+    upd = db.get_stock_finance_updated_at()
+    if not force and upd:
+        try:
+            last = datetime.strptime(upd.split()[0], "%Y-%m-%d")
+            if (datetime.now() - last).days < 7:
+                print("财务指标 %s 已采集，7 天内跳过" % upd)
+                return "跳过(7天内已采集)"
+        except Exception:
+            pass
+    n = crawler.collect_stock_finance()
+    return "写入 %d 只正股财务" % n
+
+
 def _step_detect_delist():
     """每日退市检测：按 bonds 表已存的到期日/摘牌日幂等回填 is_delisted。
 
@@ -128,6 +147,7 @@ def main():
         ("剩余规模 remaining_scale", checkup.refresh_remaining_scales),
         ("到期赎回价 redeem_price", checkup.refresh_redeem_prices),
         ("当前转股价 transfer_price", checkup.refresh_transfer_prices),
+        ("正股财务 stock_finance", lambda: _step_stock_finance(force)),
     ]
     results = []
     for i, (name, fn) in enumerate(steps, 1):
@@ -143,8 +163,8 @@ def main():
         final_status = "partial"   # 次要步骤失败，但核心数据可用
     else:
         final_status = "failed"
-    notes = "行情=%s 基础=%s 退市检测=%s 小盘=%s 剩余规模=%s 赎回价=%s 转股价=%s，总耗时 %.1fs" % (
-        results[0], results[1], results[2], results[3], results[4], results[5], results[6],
+    notes = "行情=%s 基础=%s 退市检测=%s 小盘=%s 剩余规模=%s 赎回价=%s 转股价=%s 财务=%s，总耗时 %.1fs" % (
+        results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[7],
         time.time() - t_all)
     db.finish_collect_run(run_id, final_status, notes=notes)
     print("\n[collect] 运行结束 run_id=%s status=%s：%s" % (run_id, final_status, notes))

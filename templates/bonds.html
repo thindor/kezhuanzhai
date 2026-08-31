@@ -44,7 +44,45 @@
       <button type="submit" class="ff-btn">筛选</button>
       <a class="ff-reset" href="/bonds">重置</a>
     </div>
+
+    <div class="ff-adv-toggle">
+      <button type="button" id="advToggle" class="ff-link" onclick="toggleAdv()">{% if adv_active %}🔧 高级搜索 ▴{% else %}🔧 高级搜索 ▾{% endif %}</button>
+    </div>
+    <div class="ff-adv" id="advPanel" style="display:{% if adv_active %}block{% else %}none{% endif %};">
+      <div class="ff-grid">
+        <label class="ff-check"><input type="checkbox" name="hist_low" value="1" {% if hist_low %}checked{% endif %}> 仅看历史新低</label>
+        <label class="ff-field">评级
+          <select name="rating">
+            <option value="">不限</option>
+            {% for ro in rating_options %}<option value="{{ ro }}" {% if rating==ro %}selected{% endif %}>{{ ro }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="ff-field">转债价格区间（元）
+          <span class="ff-range"><input type="number" step="0.01" name="price_min" value="{{ price_min }}" placeholder="最低"> ~ <input type="number" step="0.01" name="price_max" value="{{ price_max }}" placeholder="最高"></span>
+        </label>
+        <label class="ff-field">剩余规模 ≤ <input type="number" step="0.01" name="remain_scale_max" value="{{ remain_scale_max }}"> 亿</label>
+        <label class="ff-field">转债占比 ≤ <input type="number" step="0.01" name="cb_ratio_max" value="{{ cb_ratio_max }}"> %</label>
+        <label class="ff-field">资产负债率 ≤ <input type="number" step="0.01" name="debt_ratio_max" value="{{ debt_ratio_max }}"> %</label>
+        <label class="ff-field">溢价率 ≤ <input type="number" step="0.01" name="premium_max" value="{{ premium_max }}"> %</label>
+        <label class="ff-field">剩余年限（年）
+          <span class="ff-range"><input type="number" step="0.1" name="year_min" value="{{ year_min }}" placeholder="最短"> ~ <input type="number" step="0.1" name="year_max" value="{{ year_max }}" placeholder="最长"></span>
+        </label>
+        <label class="ff-field">有息负债 ≤ <input type="number" step="0.01" name="interest_debt_max" value="{{ interest_debt_max }}"> %</label>
+      </div>
+      <p class="ff-note">
+        财务数据更新于 {{ fin_updated or '—' }}，覆盖 {{ fin_count }} 只正股（资产负债率/有息负债率/转债占比分母）。
+        剩余规模与转债占比当前覆盖 {{ remain_count }} 只活跃转债（免费数据源限制，未全量）。
+      </p>
+    </div>
   </form>
+  <script>
+    function toggleAdv(){
+      var p=document.getElementById('advPanel');
+      var t=document.getElementById('advToggle');
+      if(p.style.display==='none'){p.style.display='block';t.innerHTML='🔧 高级搜索 ▴';}
+      else{p.style.display='none';t.innerHTML='🔧 高级搜索 ▾';}
+    }
+  </script>
   <p class="sort-tip">点击表头可排序（再次点击切换升/降序，缺失值排末尾）</p>
 
   <div class="table-wrap">

@@ -385,6 +385,23 @@ table.rank.down-revise td { white-space:nowrap; }
 .ff-reset { color:#6b7280; font-size:14px; text-decoration:none; margin-left:4px; }
 .ff-reset:hover { color:#2f6bff; text-decoration:underline; }
 
+/* 高级搜索（默认隐藏，点击展开） */
+.ff-adv-toggle { max-width:1320px; margin:0 auto; padding:0 16px; }
+.ff-link { background:none; border:none; color:#2f6bff; font-size:14px; cursor:pointer;
+  padding:4px 0 8px; font-weight:600; }
+.ff-adv { max-width:1320px; margin:0 auto 14px; padding:14px 16px; background:#f6f8fc;
+  border:1px solid #e4e9f2; border-radius:12px; }
+.ff-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px 18px; }
+.ff-field { display:flex; align-items:center; gap:6px; font-size:14px; color:#374151; }
+.ff-field > select, .ff-field > input[type=number] {
+  padding:8px 10px; border:1px solid #d0d4dc; border-radius:9px; font-size:14px; background:#fff; }
+.ff-field > input[type=number] { width:92px; }
+.ff-field > select { width:auto; }
+.ff-range { display:inline-flex; align-items:center; gap:6px; }
+.ff-check { display:flex; align-items:center; gap:6px; font-size:14px; color:#374151; }
+.ff-check > input { width:16px; height:16px; }
+.ff-note { margin:12px 0 0; font-size:12.5px; color:#8a93a3; line-height:1.5; }
+
 /* 分页 */
 .pager { display:flex; align-items:center; gap:14px; justify-content:center; margin:18px 0 30px; }
 .pager .pg { text-decoration:none; color:#2f6bff; border:1px solid #d6e0ff; background:#fff;

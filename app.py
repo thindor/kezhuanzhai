@@ -312,6 +312,19 @@ def _is_bot():
                ("bot", "spider", "crawl", "slurp", "mediapartners", "archive", "http"))
 
 
+def _flt(v):
+    """把请求参数解析为 float，空/非法返回 None（高级筛选区间用）。"""
+    if v is None:
+        return None
+    v = str(v).strip()
+    if v == "":
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
 @app.context_processor
 def inject_freshness():
     """全局注入『数据截至』日期，供所有模板顶部新鲜度条使用。"""
@@ -537,6 +550,18 @@ def bonds_list():
         down_min = int(request.args.get("down_min", "").strip())
     except (ValueError, TypeError):
         down_min = None
+    # ---- 高级筛选参数 ----
+    hist_low = request.args.get("hist_low", "") == "1"
+    rating = (request.args.get("rating", "") or "").strip()
+    price_min = _flt(request.args.get("price_min"))
+    price_max = _flt(request.args.get("price_max"))
+    remain_scale_max = _flt(request.args.get("remain_scale_max"))
+    cb_ratio_max = _flt(request.args.get("cb_ratio_max"))
+    debt_ratio_max = _flt(request.args.get("debt_ratio_max"))
+    premium_max = _flt(request.args.get("premium_max"))
+    year_min = _flt(request.args.get("year_min"))
+    year_max = _flt(request.args.get("year_max"))
+    interest_debt_max = _flt(request.args.get("interest_debt_max"))
     page_size = 50
     # 取【全部匹配】行（排序在 Python 层完成——转股价值/溢价率为衍生字段，无法下推 SQL）
     rows_all, total = search_bonds(code=code, delisted=delisted, has_down=has_down,
@@ -544,6 +569,9 @@ def bonds_list():
     # 批量补充衍生字段：正股最新收盘价 -> 转股价值/转股溢价率（一次性批量查询，避免 N+1）
     _codes = [b["bond_code"] for b in rows_all]
     _stock_close = db.get_latest_stock_closes(_codes)
+    # 高级筛选所需的批量数据：正股财务（资产负债率/有息负债率/总股本）、历史最低收盘价
+    _fin_map = db.get_stock_finance_map()
+    _hist_low_map = db.get_hist_low_map()
 
     def _enrich_derived(b):
         _tp = db.effective_transfer_price(b)  # 与详情页共用单一权威有效转股价（下修后价优先）
@@ -570,6 +598,71 @@ def bonds_list():
 
     for b in rows_all:
         _enrich_derived(b)
+
+    # ---- 高级筛选：补充衍生字段并过滤（在 Python 层完成，与衍生字段同口径）----
+    for b in rows_all:
+        _code = b["bond_code"]
+        _fin = _fin_map.get(b.get("stock_code") or "")
+        b["debt_ratio"] = _fin.get("debt_ratio") if _fin else None
+        b["interest_debt_ratio"] = _fin.get("interest_debt_ratio") if _fin else None
+        # 转债占比% = 剩余规模(亿) / 正股总市值(亿) × 100；总市值=总股本(股)×正股现价/1e8
+        _ts = _fin.get("total_share") if _fin else None
+        _rs = b.get("remaining_scale")
+        _sp = _stock_close.get(_code)
+        b["cb_ratio"] = None
+        if _rs and _ts and _sp:
+            try:
+                _mcap_yi = float(_ts) * float(_sp) / 1e8
+                if _mcap_yi > 0:
+                    b["cb_ratio"] = round(float(_rs) / _mcap_yi * 100, 2)
+            except (TypeError, ValueError):
+                pass
+        b["years_left"] = checkup.years_left(b.get("expire_date"))
+        _hl = _hist_low_map.get(_code)
+        b["is_hist_low"] = (b.get("current_price") is not None and _hl is not None
+                            and float(b["current_price"]) <= float(_hl))
+
+    def _norm_rating(r):
+        if not r:
+            return ""
+        return r.replace("sti", "").replace("STI", "").split("/")[0].split("-")[0].strip()
+
+    _adv = (hist_low or rating or price_min is not None or price_max is not None
+            or remain_scale_max is not None or cb_ratio_max is not None
+            or debt_ratio_max is not None or premium_max is not None
+            or year_min is not None or year_max is not None or interest_debt_max is not None)
+    if _adv:
+        _kept = []
+        for b in rows_all:
+            if hist_low and not b.get("is_hist_low"):
+                continue
+            if rating and _norm_rating(b.get("rating")) != rating:
+                continue
+            _p = b.get("current_price")
+            if price_min is not None and (_p is None or float(_p) < price_min):
+                continue
+            if price_max is not None and (_p is None or float(_p) > price_max):
+                continue
+            _rs = b.get("remaining_scale")
+            if remain_scale_max is not None and (_rs is None or float(_rs) > remain_scale_max):
+                continue
+            if cb_ratio_max is not None and (b.get("cb_ratio") is None or float(b["cb_ratio"]) > cb_ratio_max):
+                continue
+            if debt_ratio_max is not None and (b.get("debt_ratio") is None or float(b["debt_ratio"]) > debt_ratio_max):
+                continue
+            if premium_max is not None and (b.get("premium") is None or float(b["premium"]) > premium_max):
+                continue
+            _yl = b.get("years_left")
+            if year_min is not None and (_yl is None or float(_yl) < year_min):
+                continue
+            if year_max is not None and (_yl is None or float(_yl) > year_max):
+                continue
+            if interest_debt_max is not None and (b.get("interest_debt_ratio") is None
+                                                  or float(b["interest_debt_ratio"]) > interest_debt_max):
+                continue
+            _kept.append(b)
+        rows_all = _kept
+        total = len(rows_all)
 
     # 按列排序：①已退市债永远置后（与 SQL COALESCE(is_delisted,0) ASC 一致，避免第一页被退市债占满）；
     # ②缺失值(None) 在各自分组内排最后，与排序方向无关
@@ -623,10 +716,33 @@ def bonds_list():
     prev_url = ("/bonds?" + urllib.parse.urlencode(args)) if page > 1 else None
     args["page"] = page + 1
     next_url = ("/bonds?" + urllib.parse.urlencode(args)) if page < total_pages else None
+    # 评级下拉选项（归一化后按等级大致排序）
+    _rating_raw = [r[0] for r in db.get_conn().execute(
+        "SELECT DISTINCT rating FROM bonds WHERE rating IS NOT NULL AND rating<>''").fetchall()]
+    _rorder = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
+               "BB", "B", "CCC", "CC", "C"]
+    _rating_options = sorted({_norm_rating(x) for x in _rating_raw if _norm_rating(x)})
+    _rating_options.sort(key=lambda x: _rorder.index(x) if x in _rorder else 99)
     return render_template("bonds.html", rows=rows, total=total, page=page,
                            total_pages=total_pages, code=code, delisted=delisted,
                            has_down=has_down, down_min=(down_min if down_min is not None else ""),
-                           sort=sort, order=order, prev_url=prev_url, next_url=next_url)
+                           sort=sort, order=order, prev_url=prev_url, next_url=next_url,
+                           # 高级筛选：回显当前值 + 选项
+                           hist_low=hist_low, rating=rating, rating_options=_rating_options,
+                           price_min=(price_min if price_min is not None else ""),
+                           price_max=(price_max if price_max is not None else ""),
+                           remain_scale_max=(remain_scale_max if remain_scale_max is not None else ""),
+                           cb_ratio_max=(cb_ratio_max if cb_ratio_max is not None else ""),
+                           debt_ratio_max=(debt_ratio_max if debt_ratio_max is not None else ""),
+                           premium_max=(premium_max if premium_max is not None else ""),
+                           year_min=(year_min if year_min is not None else ""),
+                           year_max=(year_max if year_max is not None else ""),
+                           interest_debt_max=(interest_debt_max if interest_debt_max is not None else ""),
+                           adv_active=_adv,
+                           fin_updated=db.get_stock_finance_updated_at(),
+                           fin_count=db.get_conn().execute("SELECT COUNT(*) FROM stock_finance").fetchone()[0],
+                           remain_count=db.get_conn().execute(
+                               "SELECT COUNT(*) FROM bonds WHERE remaining_scale IS NOT NULL").fetchone()[0])
 
 
 # 可转债公告类型展示顺序与配色
@@ -1334,24 +1450,25 @@ def watchlist_page():
                     premium = round((float(price) / conv - 1) * 100, 2)
                 except (TypeError, ValueError):
                     premium = None
-        # 最新双低（双低榜最近一周）
+        # 双低值 = 现价 + 转股溢价率（实时计算，与详情页、/double-low 榜单同口径）
+        # ⚠️ 不可用 double_low_log：那是每周一写入的「前20名」周快照，既非实时值
+        #    （会与同行现价/溢价率对不上），且从未进过榜单的债查不到、显示 —
         dl = None
-        try:
-            conn = db.get_conn(); conn.row_factory = sqlite3.Row; cur = conn.cursor()
-            r = cur.execute(
-                "SELECT double_low FROM double_low_log WHERE bond_code=? ORDER BY week_start DESC LIMIT 1",
-                (code,)).fetchone()
-            conn.close()
-            dl = round(r["double_low"], 2) if r and r["double_low"] is not None else None
-        except Exception:
-            dl = None
+        if price is not None and premium is not None:
+            try:
+                dl = round(float(price) + premium, 2)
+            except (TypeError, ValueError):
+                dl = None
+        # 剩余年限：由到期日实时算。bonds 表没有 remain_years 列——该键只在
+        # db.get_new_bonds() 里现算，get_bond() 是 SELECT * 不会返回它，直接 get 恒为 None
+        year_left = checkup.years_left(bond.get("expire_date")) if bond else None
         rows.append({
             "code": code,
             "name": it.get("bond_name") or bond.get("bond_name") or code,
             "price": price,
             "premium": premium,
             "rating": bond.get("rating"),
-            "year_left": bond.get("remain_years"),
+            "year_left": round(year_left, 2) if year_left is not None else None,
             "double_low": dl,
             "decision": db.latest_decision(code),
             "added_at": it.get("added_at"),
