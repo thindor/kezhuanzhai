@@ -46,41 +46,103 @@
     </div>
 
     <div class="ff-adv-toggle">
-      <button type="button" id="advToggle" class="ff-link" onclick="toggleAdv()">{% if adv_active %}🔧 高级搜索 ▴{% else %}🔧 高级搜索 ▾{% endif %}</button>
+      <button type="button" id="advToggle" class="ff-link" onclick="toggleAdv()">{% if adv_active %}🔧 收起高级搜索 ▴{% else %}🔧 展开高级搜索 ▾{% endif %}</button>
     </div>
     <div class="ff-adv" id="advPanel" style="display:{% if adv_active %}block{% else %}none{% endif %};">
+      <div class="ff-adv-head">
+        <div class="ff-adv-title">高级筛选 <span class="ff-adv-hint">9 项维度 · 精准定位符合条件的转债</span></div>
+        <button type="button" class="ff-adv-clear" onclick="clearAdv()">清空高级筛选</button>
+      </div>
       <div class="ff-grid">
-        <label class="ff-check"><input type="checkbox" name="hist_low" value="1" {% if hist_low %}checked{% endif %}> 仅看历史新低</label>
-        <label class="ff-field">评级
+        <div class="ff-item">
+          <div class="ff-item-label">仅看历史新低</div>
+          <label class="ff-toggle-row">
+            <input type="checkbox" name="hist_low" value="1" {% if hist_low %}checked{% endif %}>
+            <span>当前价 = 历史最低收盘</span>
+          </label>
+        </div>
+        <div class="ff-item">
+          <div class="ff-item-label">信用评级</div>
           <select name="rating">
             <option value="">不限</option>
             {% for ro in rating_options %}<option value="{{ ro }}" {% if rating==ro %}selected{% endif %}>{{ ro }}</option>{% endfor %}
           </select>
-        </label>
-        <label class="ff-field">转债价格区间（元）
-          <span class="ff-range"><input type="number" step="0.01" name="price_min" value="{{ price_min }}" placeholder="最低"> ~ <input type="number" step="0.01" name="price_max" value="{{ price_max }}" placeholder="最高"></span>
-        </label>
-        <label class="ff-field">剩余规模 ≤ <input type="number" step="0.01" name="remain_scale_max" value="{{ remain_scale_max }}"> 亿</label>
-        <label class="ff-field">转债占比 ≤ <input type="number" step="0.01" name="cb_ratio_max" value="{{ cb_ratio_max }}"> %</label>
-        <label class="ff-field">资产负债率 ≤ <input type="number" step="0.01" name="debt_ratio_max" value="{{ debt_ratio_max }}"> %</label>
-        <label class="ff-field">溢价率 ≤ <input type="number" step="0.01" name="premium_max" value="{{ premium_max }}"> %</label>
-        <label class="ff-field">剩余年限（年）
-          <span class="ff-range"><input type="number" step="0.1" name="year_min" value="{{ year_min }}" placeholder="最短"> ~ <input type="number" step="0.1" name="year_max" value="{{ year_max }}" placeholder="最长"></span>
-        </label>
-        <label class="ff-field">有息负债 ≤ <input type="number" step="0.01" name="interest_debt_max" value="{{ interest_debt_max }}"> %</label>
+        </div>
+        <div class="ff-item">
+          <div class="ff-item-label">转债价格区间（元）</div>
+          <div class="ff-range">
+            <input type="number" step="0.01" name="price_min" value="{{ price_min }}" placeholder="最低">
+            <span class="sep">—</span>
+            <input type="number" step="0.01" name="price_max" value="{{ price_max }}" placeholder="最高">
+          </div>
+        </div>
+        <div class="ff-item">
+          <div class="ff-item-label">剩余规模（亿）</div>
+          <div class="ff-suffix">
+            <input type="number" step="0.01" name="remain_scale_max" value="{{ remain_scale_max }}" placeholder="上限">
+            <span class="unit">亿以下</span>
+          </div>
+        </div>
+        <div class="ff-item">
+          <div class="ff-item-label">转债占比</div>
+          <div class="ff-suffix">
+            <input type="number" step="0.01" name="cb_ratio_max" value="{{ cb_ratio_max }}" placeholder="上限">
+            <span class="unit">% 以下</span>
+          </div>
+        </div>
+        <div class="ff-item">
+          <div class="ff-item-label">剩余年限（年）</div>
+          <div class="ff-range">
+            <input type="number" step="0.1" name="year_min" value="{{ year_min }}" placeholder="最短">
+            <span class="sep">—</span>
+            <input type="number" step="0.1" name="year_max" value="{{ year_max }}" placeholder="最长">
+          </div>
+        </div>
+        <div class="ff-item">
+          <div class="ff-item-label">资产负债率</div>
+          <div class="ff-suffix">
+            <input type="number" step="0.01" name="debt_ratio_max" value="{{ debt_ratio_max }}" placeholder="上限">
+            <span class="unit">% 以下</span>
+          </div>
+        </div>
+        <div class="ff-item">
+          <div class="ff-item-label">转股溢价率</div>
+          <div class="ff-suffix">
+            <input type="number" step="0.01" name="premium_max" value="{{ premium_max }}" placeholder="上限">
+            <span class="unit">% 以下</span>
+          </div>
+        </div>
+        <div class="ff-item">
+          <div class="ff-item-label">有息负债率</div>
+          <div class="ff-suffix">
+            <input type="number" step="0.01" name="interest_debt_max" value="{{ interest_debt_max }}" placeholder="上限">
+            <span class="unit">% 以下</span>
+          </div>
+        </div>
       </div>
-      <p class="ff-note">
-        财务数据更新于 {{ fin_updated or '—' }}，覆盖 {{ fin_count }} 只正股（资产负债率/有息负债率/转债占比分母）。
-        剩余规模与转债占比当前覆盖 {{ remain_count }} 只活跃转债（免费数据源限制，未全量）。
-      </p>
+      <div class="ff-info">
+        <span class="ff-info-icon">ⓘ</span>
+        <div class="ff-info-text">
+          <strong>数据覆盖：</strong>财务指标更新于 {{ fin_updated or '—' }}，覆盖 <b>{{ fin_count }}</b> 只正股（资产负债率 / 有息负债率 / 转债占比分母）；
+          剩余规模与转债占比当前仅覆盖 <b>{{ remain_count }}</b> 只活跃转债（免费数据源限制，未全量）。
+        </div>
+      </div>
     </div>
   </form>
   <script>
     function toggleAdv(){
       var p=document.getElementById('advPanel');
       var t=document.getElementById('advToggle');
-      if(p.style.display==='none'){p.style.display='block';t.innerHTML='🔧 高级搜索 ▴';}
-      else{p.style.display='none';t.innerHTML='🔧 高级搜索 ▾';}
+      if(p.style.display==='none'){p.style.display='block';t.innerHTML='🔧 收起高级搜索 ▴';}
+      else{p.style.display='none';t.innerHTML='🔧 展开高级搜索 ▾';}
+    }
+    function clearAdv(){
+      var panel=document.getElementById('advPanel');
+      panel.querySelectorAll('input, select').forEach(function(el){
+        if(el.type==='checkbox'||el.type==='radio') el.checked=false;
+        else el.value='';
+      });
+      document.querySelector('.filter-form').submit();
     }
   </script>
   <p class="sort-tip">点击表头可排序（再次点击切换升/降序，缺失值排末尾）</p>
