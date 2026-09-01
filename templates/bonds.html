@@ -124,7 +124,7 @@
         <span class="ff-info-icon">ⓘ</span>
         <div class="ff-info-text">
           <strong>数据覆盖：</strong>财务指标更新于 {{ fin_updated or '—' }}，覆盖 <b>{{ fin_count }}</b> 只正股（资产负债率 / 有息负债率 / 转债占比分母）；
-          剩余规模与转债占比当前仅覆盖 <b>{{ remain_count }}</b> 只活跃转债（免费数据源限制，未全量）。
+           剩余规模与转债占比：真值来自集思录实时表（配置登录 cookie 后全量覆盖）；当前共 <b>{{ remain_count }}</b> 只已覆盖（其中真值 <b>{{ remain_true_count }}</b> 只，其余以「发行规模」代理并标注「≈发行」，口径略偏大）。
         </div>
       </div>
     </div>
@@ -182,7 +182,7 @@
           <td class="num">{{ '%.2f'|format(b.conv_value) if b.conv_value is not none else '-' }}</td>
           <td class="num">{{ ('%.2f%%'|format(b.premium)) if b.premium is not none else '-' }}</td>
           <td class="num">{{ '%.2f'|format(b.redeem_price) if b.redeem_price else '-' }}</td>
-          <td class="num">{% if b.remaining_scale_disp %}{{ '%.2f'|format(b.remaining_scale_disp) }}亿{% if not b.is_remaining %}<span class="approx">≈发行</span>{% endif %}{% else %}-{% endif %}</td>
+          <td class="num">{% if b.remaining_scale_disp %}{{ '%.2f'|format(b.remaining_scale_disp) }}亿{% if b.remaining_scale_proxy %}<span class="approx">≈发行代理</span>{% endif %}{% else %}-{% endif %}</td>
           <td>{{ b.expire_date or '-' }}</td>
           <td>{% set dc = b.down_revise_count or 0 %}{% if dc > 0 %}<a class="down-badge" href="/xiuxie/{{ b.bond_code }}">{{ dc }} 次</a>{% else %}-{% endif %}</td>
           <td>{% if b.redemption_warn %}<a class="warn-badge {{ b.redemption_warn.level }}" href="/bond/{{ b.bond_code }}" title="近30交易日已有 {{ b.redemption_warn.satisfy_cnt }}/15 日正股价≥转股价130%，预计 {{ b.redemption_warn.remaining }} 个交易日内触发强赎">⚠ {{ b.redemption_warn.remaining }}日内触发</a>{% else %}-{% endif %}</td>

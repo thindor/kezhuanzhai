@@ -37,6 +37,7 @@ docs/superpowers/
 
 # ---- 第三方登录凭据（雪球/集思录等 cookie，严禁入库）----
 xueqiu_cookie.txt
+jsl_cookie.txt
 config_private.py
 
 # ---- 临时探查 / 调试脚本（本地验证用，不入库）----
@@ -46,3 +47,6 @@ tmp_*.py
 
 # ---- 持有人手动刷新状态文件（运行时产生，非源码）----
 holder_refresh_status.json
+
+# ---- 集思录 Cookie 抓取状态文件（运行时产生，非源码）----
+jsl_cookie_status.json

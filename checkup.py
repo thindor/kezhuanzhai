@@ -257,6 +257,47 @@ def fetch_jsl_cb_list(force=False):
     return out
 
 
+def fetch_jsl_cb_list_auth(cookie, rp=50, max_pages=40):
+    """集思录【登录态】全量列表：POST cb_list_new，逐页(rp=50)翻页拿全市场 ~500 只。
+    返回 {bond_id: cell}（含 curr_iss_amt=剩余规模）。未登录(每页被限流30)或异常返回 {}。"""
+    if not cookie:
+        return {}
+    out = {}
+    try:
+        t = int(time.time() * 1000)
+        url = "https://www.jisilu.cn/data/cbnew/cb_list_new/?___jsl=LST___t=%d" % t
+        headers = {
+            "User-Agent": EM_UA,
+            "Referer": "https://www.jisilu.cn/data/cbnew/",
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Cookie": cookie,
+        }
+        for page in range(1, max_pages + 1):
+            payload = {
+                "fprice": "", "tprice": "", "curr_iss_amt": "", "volume": "",
+                "svolume": "", "premium_rt": "", "ytm_rt": "", "market": "",
+                "rating_cd": "", "is_search": "N",
+                "market_cd[]": ["shmb", "shkc", "szmb", "szcy"],
+                "btype": "", "listed": "Y", "qflag": "N", "sw_cd": "",
+                "bond_ids": "", "rp": str(rp), "page": str(page),
+            }
+            r = requests.post(url, data=payload, headers=headers, timeout=20)
+            data = r.json()
+            rows = data.get("rows") or []
+            for ro in rows:
+                c = ro.get("cell", {})
+                bid = c.get("bond_id")
+                if bid:
+                    out[bid] = c
+            if len(rows) < rp:
+                break  # 已到末页
+    except Exception as e:
+        print("[fetch_jsl_cb_list_auth] 异常: %s" % e)
+        return {}
+    return out
+
+
 def _f(v):
     try:
         if v is None or v == "":
@@ -266,21 +307,31 @@ def _f(v):
         return None
 
 
-def refresh_remaining_scales():
-    """集思录前30活跃债 curr_iss_amt(剩余规模,亿) -> bonds.remaining_scale。
-
-    东财 RPT_BOND_CB_LIST 无剩余规模字段；集思录匿名仅返回前30活跃债，故逐日
-    滚动补全（债券进入活跃榜即写入）。返回写入条数；异常时静默返回 0。"""
+def load_jsl_cookie():
+    """读取集思录登录 cookie：优先环境变量 JSL_COOKIE，其次项目根 jsl_cookie.txt。
+    该文件已被 .gitignore 忽略，切勿入库。无 cookie 返回 None（走匿名回退）。"""
+    import os
+    env = os.environ.get("JSL_COOKIE")
+    if env and env.strip():
+        return env.strip()
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jsl_cookie.txt")
     try:
-        jsl = fetch_jsl_cb_list(force=True)
-    except Exception:
-        return 0
-    if not jsl:
+        with open(p, "r", encoding="utf-8") as f:
+            c = f.read().strip()
+        return c or None
+    except FileNotFoundError:
+        return None
+
+
+def _write_remaining_scales(jsl_dict):
+    """把 {bond_id: cell} 中的 curr_iss_amt(剩余规模,亿) 写入 bonds.remaining_scale。
+    仅 UPDATE 有值的债，绝不置 NULL，故回退运行不会清空已填数据。返回写入条数。"""
+    if not jsl_dict:
         return 0
     conn = get_conn()
     cur = conn.cursor()
     n = 0
-    for bid, c in jsl.items():
+    for bid, c in jsl_dict.items():
         rs = _f(c.get("curr_iss_amt"))
         if rs is not None and rs > 0:
             cur.execute("UPDATE bonds SET remaining_scale=? WHERE bond_code=?", (rs, bid))
@@ -288,6 +339,35 @@ def refresh_remaining_scales():
     conn.commit()
     conn.close()
     return n
+
+
+def refresh_remaining_scales():
+    """剩余规模(亿) 全量补全：主源集思录登录 cookie（自调 cb_list_new 翻页拿全市场 ~500 只），
+    回退源为匿名 cb_list_new（前30活跃债，旧 crawler 保留）。
+
+    设计：
+      - 配置了 jsl cookie 且拉取健康(>=200 只) -> 写入全量，覆盖说明从「34 只」升级为全市场。
+      - cookie 缺失 / 失效(游客限流每页仅30) / 异常 -> 自动回退匿名 30 行，旧行为不变、不退化。
+      - 写入仅 UPDATE 有值项，故 cookie 偶发失效的回退运行不会清空已全量填充的数据。
+    返回写入条数；彻底失败静默返回 0。"""
+    cookie = load_jsl_cookie()
+    if cookie:
+        try:
+            d = fetch_jsl_cb_list_auth(cookie)
+            if len(d) >= 200:  # 全量健康
+                n = _write_remaining_scales(d)
+                print("[refresh_remaining_scales] 集思录登录态全量写入 %d 只" % n)
+                return n
+            # cookie 失效/游客限流(仅~30) -> 回退匿名，不覆盖全量数据
+            print("[refresh_remaining_scales] jisilu cookie 拉取仅 %d 只，疑似失效，回退匿名源" % len(d))
+        except Exception as e:
+            print("[refresh_remaining_scales] jisilu cookie 拉取异常，回退匿名源: %s" % e)
+    # 回退：旧匿名爬虫（前30活跃债）
+    try:
+        jsl = fetch_jsl_cb_list(force=True)
+    except Exception:
+        return 0
+    return _write_remaining_scales(jsl)
 
 
 def refresh_redeem_prices():

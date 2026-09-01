@@ -605,9 +605,15 @@ def bonds_list():
         _fin = _fin_map.get(b.get("stock_code") or "")
         b["debt_ratio"] = _fin.get("debt_ratio") if _fin else None
         b["interest_debt_ratio"] = _fin.get("interest_debt_ratio") if _fin else None
+        # 剩余规模：真值(集思录)优先；缺则回退发行规模(东财)作代理，明确标注、不污染真值列
+        _rs_raw = b.get("remaining_scale")
+        _iss = b.get("issue_scale")
+        b["eff_remaining_scale"] = _rs_raw if (_rs_raw not in (None,)) else _iss
+        b["remaining_scale_proxy"] = (_rs_raw in (None,)) and (_iss is not None)
         # 转债占比% = 剩余规模(亿) / 正股总市值(亿) × 100；总市值=总股本(股)×正股现价/1e8
+        # 缺真值时用发行规模代理（同单位，口径略偏大，页面标注「代理」）
         _ts = _fin.get("total_share") if _fin else None
-        _rs = b.get("remaining_scale")
+        _rs = b.get("eff_remaining_scale")
         _sp = _stock_close.get(_code)
         b["cb_ratio"] = None
         if _rs and _ts and _sp:
@@ -643,7 +649,7 @@ def bonds_list():
                 continue
             if price_max is not None and (_p is None or float(_p) > price_max):
                 continue
-            _rs = b.get("remaining_scale")
+            _rs = b.get("eff_remaining_scale")
             if remain_scale_max is not None and (_rs is None or float(_rs) > remain_scale_max):
                 continue
             if cb_ratio_max is not None and (b.get("cb_ratio") is None or float(b["cb_ratio"]) > cb_ratio_max):
@@ -702,13 +708,9 @@ def bonds_list():
     for b in rows:
         b["redemption_warn"] = crawler.compute_redemption_warning(b["bond_code"])
         b["redeem_price"] = b.get("redeem_price") or None
-        _rs = b.get("remaining_scale")
-        if _rs is None or _rs <= 0:
-            _rs = b.get("issue_scale")
-            b["is_remaining"] = False
-        else:
-            b["is_remaining"] = True
+        _rs = b.get("eff_remaining_scale")
         b["remaining_scale_disp"] = _rs
+        b["is_remaining"] = (_rs is not None and _rs > 0)
     total_pages = (total + page_size - 1) // page_size
     # 分页 URL：保留全部筛选/排序参数，仅覆盖 page
     args = dict(request.args)
@@ -742,6 +744,8 @@ def bonds_list():
                            fin_updated=db.get_stock_finance_updated_at(),
                            fin_count=db.get_conn().execute("SELECT COUNT(*) FROM stock_finance").fetchone()[0],
                            remain_count=db.get_conn().execute(
+                               "SELECT COUNT(*) FROM bonds WHERE remaining_scale IS NOT NULL OR issue_scale IS NOT NULL").fetchone()[0],
+                           remain_true_count=db.get_conn().execute(
                                "SELECT COUNT(*) FROM bonds WHERE remaining_scale IS NOT NULL").fetchone()[0])
 
 
@@ -1228,6 +1232,115 @@ def admin_holder_refresh_status():
         return jsonify(st)
     except Exception as e:
         return jsonify({"running": False, "message": "状态读取失败：" + str(e)})
+
+
+def _find_playwright_python():
+    """返回可 import playwright 的 python 解释器路径；找不到返回 None。
+
+    本机 Flask(default) 环境未装 playwright，装了 chromium 的是 lofnotice 环境，
+    故优先探测该路径，其次回退到当前解释器与 default 环境。"""
+    candidates = [
+        r"C:/Users/Administrator/.workbuddy/binaries/python/envs/lofnotice/Scripts/python.exe",
+        sys.executable,
+        r"C:/Users/Administrator/.workbuddy/binaries/python/envs/default/Scripts/python.exe",
+    ]
+    seen = set()
+    for cand in candidates:
+        if not cand or cand in seen or not os.path.exists(cand):
+            continue
+        seen.add(cand)
+        try:
+            r = subprocess.run([cand, "-c", "import playwright"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=20)
+            if r.returncode == 0:
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+@app.route("/admin/capture-jsl-cookie", methods=["POST"])
+def admin_capture_jsl_cookie():
+    """后台手动触发集思录 Cookie 抓取（弹窗登录）。
+
+    独立进程跑 capture_jsl_cookie.py（可见浏览器，用户扫码/密码登录），
+    运行状态写入 jsl_cookie_status.json，前端轮询 /admin/api/jsl-cookie-status。
+    抓取成功后脚本会自动 refresh_remaining_scales() 补全剩余规模真值。"""
+    if not is_admin():
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    status_file = os.path.join(BASE_DIR, "jsl_cookie_status.json")
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, encoding="utf-8") as f:
+                st = json.load(f)
+            if st.get("running"):
+                return jsonify({"ok": False, "message": "上一个 Cookie 抓取任务进行中，请稍候"})
+        except Exception:
+            pass
+    pw_python = _find_playwright_python()
+    if not pw_python:
+        return jsonify({"ok": False,
+                        "message": "未找到可用的 Playwright 环境（请在本地带桌面的机器上运行，并确认已安装 playwright 与 chromium 浏览器）"}), 500
+    log_path = os.path.join(BASE_DIR, "jsl_cookie.log")
+    try:
+        with open(log_path, "a", encoding="utf-8") as lf:
+            subprocess.Popen(
+                [pw_python, "capture_jsl_cookie.py"],
+                cwd=BASE_DIR, stdout=lf, stderr=lf,
+                start_new_session=(os.name != "nt"))
+        return jsonify({"ok": True, "message": "已打开浏览器，请登录集思录（扫码后务必在手机点确认）"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": "启动失败：" + str(e)}), 500
+
+
+@app.route("/admin/api/jsl-cookie-status")
+def admin_jsl_cookie_status():
+    if not is_admin():
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    status_file = os.path.join(BASE_DIR, "jsl_cookie_status.json")
+    status = None
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, encoding="utf-8") as f:
+                status = json.load(f)
+        except Exception:
+            status = None
+    # 当前 cookie 元信息
+    cookie_file = os.path.join(BASE_DIR, "jsl_cookie.txt")
+    cookie_meta = {"exists": False, "captured_at": None, "length": 0}
+    if os.path.exists(cookie_file):
+        try:
+            mtime = os.path.getmtime(cookie_file)
+            cookie_meta["exists"] = True
+            cookie_meta["captured_at"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+            cookie_meta["length"] = os.path.getsize(cookie_file)
+        except Exception:
+            pass
+    # 库内剩余规模真值只数
+    true_count = 0
+    total = 0
+    try:
+        conn = db.get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM bonds WHERE remaining_scale IS NOT NULL")
+        true_count = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM bonds")
+        total = cur.fetchone()[0] or 0
+        conn.close()
+    except Exception:
+        pass
+    if status is None:
+        return jsonify({
+            "running": False,
+            "message": "尚未获取过 Cookie（点上方按钮，扫码登录集思录即可自动抓取并补全剩余规模）",
+            "cookie": cookie_meta, "true_count": true_count, "total": total,
+        })
+    status.setdefault("ok", True)
+    status["cookie"] = cookie_meta
+    status["true_count"] = true_count
+    status["total"] = total
+    return jsonify(status)
 
 
 @app.route("/admin/settings", methods=["GET", "POST"])

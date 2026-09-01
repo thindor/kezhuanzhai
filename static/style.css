@@ -69,6 +69,9 @@ body {
 .freshness b { color:#1a2b50; }
 .freshness .dot { width:7px; height:7px; border-radius:50%; background:#2faf5b; display:inline-block; }
 .freshness .muted { color:#7a8aa6; }
+.cookie-meta { background:#f0f6ff; border:1px solid #dbe7ff; border-radius:8px; color:#36507e;
+  font-size:12.5px; padding:8px 12px; margin-bottom:12px; }
+.cookie-meta b { color:#1a2b50; }
 @media (max-width: 860px){
   .freshness { padding: 7px 14px; font-size: 12px; line-height: 1.55; row-gap: 2px; }
 }

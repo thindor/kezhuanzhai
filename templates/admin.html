@@ -73,6 +73,20 @@
       </div>
       <div class="hint" style="margin-top:6px">仅对「库内最新报告期早于当前应披露期」的未退市转债重抓，已最新者跳过；预计 3-6 分钟。剩余未放出的债会在定期报告披露后再次点击补齐。</div>
     </div>
+
+    <!-- 集思录 Cookie 管理（手动触发弹窗登录抓取） -->
+    <div class="panel">
+      <div class="panel-head">
+        <h2>集思录 Cookie 管理</h2>
+        <span class="hint">剩余规模真值依赖集思录登录态，Cookie 会过期，过期后点此重新获取</span>
+      </div>
+      <div class="cookie-meta" id="cookieMeta">加载中…</div>
+      <div class="actions">
+        <button id="jslBtn" onclick="captureJslCookie()">重新获取 Cookie（弹窗登录集思录）</button>
+        <span id="jslStatus" class="status"></span>
+      </div>
+      <div class="hint" style="margin-top:6px">点击后会弹出浏览器，请用集思录账号扫码或密码登录（<b>扫码后务必在手机上点「确认登录」</b>）。登录态以数据接口验证为准，验证通过即自动写入并补全剩余规模真值，无需手动关闭浏览器。仅本机带图形界面时可用。</div>
+    </div>
   </section>
 
   <!-- 区块1：已收录转债（已抓取持有人）— 点菜单才加载 -->
@@ -479,6 +493,66 @@ async function recoverHoldersPolling(){
   }catch(e){}
 }
 
+/* ---------- 集思录 Cookie 抓取（弹窗登录） ---------- */
+let jslTimer = null;
+async function captureJslCookie(){
+  const btn = document.getElementById('jslBtn');
+  const st = document.getElementById('jslStatus');
+  st.textContent = '请求中…';
+  try{
+    const r = await fetch('/admin/capture-jsl-cookie', {method:'POST'});
+    const d = await r.json().catch(() => ({ok:false, message:'返回非 JSON'}));
+    if(!d.ok){ st.textContent = d.message; return; }
+    btn.disabled = true;
+    pollJslCookie();
+  }catch(e){ st.textContent = '启动失败：' + e; }
+}
+async function pollJslCookie(){
+  const st = document.getElementById('jslStatus');
+  try{
+    const r = await fetch('/admin/api/jsl-cookie-status');
+    const d = await r.json().catch(() => ({}));
+    renderCookieMeta(d);
+    if(d.running){
+      st.textContent = (d.message || '抓取中…');
+      if(!jslTimer) jslTimer = setInterval(pollJslCookie, 4000);
+    }else{
+      st.textContent = d.message || '完成';
+      const btn = document.getElementById('jslBtn');
+      if(btn) btn.disabled = false;
+      if(jslTimer){ clearInterval(jslTimer); jslTimer = null; }
+    }
+  }catch(e){
+    st.textContent = '状态读取失败：' + e;
+    const btn = document.getElementById('jslBtn');
+    if(btn) btn.disabled = false;
+    if(jslTimer){ clearInterval(jslTimer); jslTimer = null; }
+  }
+}
+function renderCookieMeta(d){
+  const el = document.getElementById('cookieMeta');
+  if(!el) return;
+  const c = d.cookie || {};
+  const cap = c.exists ? (c.captured_at + '（' + c.length + ' 字符）') : '未获取';
+  const tc = (d.true_count != null) ? d.true_count : '-';
+  const tot = (d.total != null) ? d.total : '-';
+  el.innerHTML = '当前 Cookie：<b>' + cap + '</b> · 库内剩余规模真值：<b>' + tc + '</b> / ' + tot + ' 只';
+}
+async function recoverJslPolling(){
+  try{
+    const r = await fetch('/admin/api/jsl-cookie-status');
+    const d = await r.json().catch(() => ({}));
+    renderCookieMeta(d);
+    if(d.running){
+      const btn = document.getElementById('jslBtn');
+      if(btn) btn.disabled = true;
+      const st = document.getElementById('jslStatus');
+      if(st) st.textContent = d.message || '抓取中…';
+      pollJslCookie();
+    }
+  }catch(e){}
+}
+
 /* ---------- 站点设置 ---------- */
 function onLogoFile(e){
   const f = e.target.files && e.target.files[0];
@@ -515,6 +589,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const h = (location.hash || '').replace('#', '');
   if(h === 'settings' || h === 'collected' || h === 'market') showTab(h);
   recoverHoldersPolling();
+  recoverJslPolling();
 });
 
 async function saveSiteSettings(){

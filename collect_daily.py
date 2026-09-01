@@ -7,7 +7,8 @@
   3) db.backfill_delist_status()            【退市检测】按已存到期日/摘牌日幂等回填 is_delisted（显式步骤，新标记数写入采集日志）；
                                             标退后本步起所有后续步骤只遍历未退市券，已退市券自此不再被任何定时任务更新
   4) mini_bond.ensure_columns()+refresh_all()  刷新小盘债候选（现价/赎回价/历史最高）写回 bonds
-  5) checkup.refresh_remaining_scales()        滚动补全剩余规模（集思录前30活跃债写入 bonds.remaining_scale）
+  5) checkup.refresh_remaining_scales()        剩余规模全量补全（主源集思录登录 cookie 经 bond_cb_jsl 拉全市场 ~500 只；
+                                            未配置/失效 cookie 自动回退匿名 cb_list_new 前30活跃债，旧 crawler 保留；仅 UPDATE 有值项不置 NULL）
   6) checkup.refresh_redeem_prices()        补全到期赎回价（东财全量基础解析写入 bonds.redeem_price）
   7) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
   8) crawler.collect_stock_finance()        正股财务指标（东财 F10 全量未退市债正股：总资产/总负债/有息负债率/总股本），
