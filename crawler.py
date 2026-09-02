@@ -912,6 +912,8 @@ def _secid(code):
 
 
 _EM_REACHABLE = None  # None=尚未探测; True/False=东财 kline 接口是否可达（探测一次后缓存）
+_EM_CONSEC_FAIL = 0     # 东财逐债取数连续失败计数（网络/超时/JSON 异常），成功取数即清零
+_EM_FAIL_THRESHOLD = 5  # 连续失败达此值：推翻 _EM_REACHABLE 缓存，强制本轮剩余债券纯新浪，避免退化慢路径
 
 
 def _probe_eastmoney_reachable():
@@ -940,7 +942,9 @@ def _probe_eastmoney_reachable():
     except Exception:
         reachable = False
     _EM_REACHABLE = reachable
-    if not reachable:
+    if reachable:
+        _EM_CONSEC_FAIL = 0  # 探活通过，复位连续失败计数
+    else:
         print("[daily] 东财 kline 接口不可达（代理/网络被拦），本轮行情采集直连新浪兜底")
     return reachable
 
@@ -961,10 +965,15 @@ def fetch_sina_kline(code, datalen=320):
         "beg": 0, "end": "20500101", "lmt": datalen,
         "ut": "fa5fd1943c7b386f172d6893dbfbaa15",
     }
+    global _EM_CONSEC_FAIL
     out = []
     # 东财偶发限流返回空，重试 2 次(退避)以提升采集可靠性；
-    # 先经一次可达性探测：不可达环境(如沙箱)直接跳过，省去每只债的死循环重试
-    if _probe_eastmoney_reachable():
+    # 先经一次可达性探测：不可达环境(如沙箱)直接跳过，省去每只债的死循环重试。
+    # 健壮性兜底：若东财探活曾通过、但随后连续 N 只债取数失败（网络抖动/被 reset），
+    # 累计达阈值即推翻 _EM_REACHABLE 缓存，后续债券强制纯新浪，避免「每只债 3×15s 重试」
+    # 的退化慢路径（2026-09-02 曾因此卡 33 分钟）。
+    em_should_try = _probe_eastmoney_reachable() and _EM_CONSEC_FAIL < _EM_FAIL_THRESHOLD
+    if em_should_try:
         for attempt in range(3):
             try:
                 r = requests.get(url, params=params, timeout=15,
@@ -980,11 +989,19 @@ def fetch_sina_kline(code, datalen=320):
                         except (ValueError, TypeError):
                             continue
                 if out:
+                    _EM_CONSEC_FAIL = 0  # 成功取数，复位连续失败计数
                     return out
             except Exception:
                 pass
             if attempt < 2:
                 time.sleep(1.2)
+        # 东财三次均未取到有效数据：记一次连续失败
+        _EM_CONSEC_FAIL += 1
+        if _EM_CONSEC_FAIL >= _EM_FAIL_THRESHOLD:
+            global _EM_REACHABLE
+            _EM_REACHABLE = False
+            print("[daily] 东财连续 %d 只债取数失败，本轮剩余债券强制走新浪兜底"
+                  % _EM_CONSEC_FAIL)
     # 兜底：新浪
     try:
         sym = _sina_symbol(code)
