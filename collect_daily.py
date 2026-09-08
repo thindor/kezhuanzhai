@@ -6,14 +6,25 @@
   2) seed_bonds.main()                      刷新基础条款/转股价/退市判定，并用 daily_close 回写 bonds.current_price
   3) db.backfill_delist_status()            【退市检测】按已存到期日/摘牌日幂等回填 is_delisted（显式步骤，新标记数写入采集日志）；
                                             标退后本步起所有后续步骤只遍历未退市券，已退市券自此不再被任何定时任务更新
-  4) mini_bond.ensure_columns()+refresh_all()  刷新小盘债候选（现价/赎回价/历史最高）写回 bonds
-  5) checkup.refresh_remaining_scales()        剩余规模全量补全（主源集思录登录 cookie 经 bond_cb_jsl 拉全市场 ~500 只；
+  4) suspend.refresh_suspended_status()    【停牌检测】腾讯行情判定（今开=0 且成交量=0 = 停牌），
+                                            写 bonds.is_suspended / suspended_since；停牌债不进任何策略
+                                            （用停牌前僵尸价算双低会得出假排名，见 2026-09-07 中装转2 事故）。
+                                            ⚠️ 必须每天检测**含已停牌**的全部未退市债——若把停牌债排除，
+                                            就永远发现不了它复牌，会永久卡在停牌状态。
+                                            非交易时段（全市场零成交）自动跳过，防误判全市场停牌。
+  5) mini_bond.ensure_columns()+refresh_all()  刷新小盘债候选（现价/赎回价/历史最高）写回 bonds
+  6) checkup.refresh_remaining_scales()        剩余规模全量补全（主源集思录登录 cookie 经 bond_cb_jsl 拉全市场 ~500 只；
                                             未配置/失效 cookie 自动回退匿名 cb_list_new 前30活跃债，旧 crawler 保留；仅 UPDATE 有值项不置 NULL）
-  6) checkup.refresh_redeem_prices()        补全到期赎回价（东财全量基础解析写入 bonds.redeem_price）
-  7) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
-  8) crawler.collect_stock_finance()        正股财务指标（东财 F10 全量未退市债正股：总资产/总负债/有息负债率/总股本），
+  7) checkup.refresh_redeem_prices()        补全到期赎回价（东财全量基础解析写入 bonds.redeem_price）
+  8) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
+  9) crawler.collect_stock_finance()        正股财务指标（东财 F10 全量未退市债正股：总资产/总负债/有息负债率/总股本），
                                             供「全部转债」高级筛选的 资产负债率/有息负债率/转债占比 使用（7 天守卫，财务为季更）
-  9) verify_integrity()                     关键数据一致性校验（双低快照无未上市债/等权指数 chg% 与重算偏差 < 0.1%）；
+ 10) db.compute_equal_weight_index()        重算可转债等权指数（价格等权、基期 1000，幂等全量重算，写 equal_weight_index）。
+                                            ⚠️ 顺序约束：必须在步骤 1 行情之后（依赖当日 daily_close 收盘价），
+                                            且必须在步骤 11 一致性校验之前（否则校验读到的仍是上一日旧值）。
+                                            历史坑：2026-08-27 从 fetch_daily.py 切换到本管道时漏了这一步，
+                                            导致等权指数停在 2026-08-31，2026-09-04 补齐并加入管道。
+ 11) verify_integrity()                     关键数据一致性校验（双低快照无未上市债/等权指数 chg% 与重算偏差 < 0.1%）；
                                             失败仅写警告日志，不阻塞主流程（双低未上市债/等权指数算法均为高风险回归点）
 
   注：十大持有人随定期报告（中报/年报等）变化，更新频率低，不进每日自动管道，
@@ -48,6 +59,7 @@ import seed_bonds
 import mini_bond
 import checkup
 import verify_integrity
+import suspend
 
 
 def _is_trading_day(dt=None):
@@ -119,6 +131,40 @@ def _step_detect_delist():
     return "新标记退市 %d 只" % n
 
 
+def _step_detect_suspend():
+    """每日停牌检测：腾讯行情（今开=0 且成交量=0）判定停牌，写 bonds.is_suspended。
+
+    与「退市检测」的区别：退市是永久状态（按到期日/摘牌日判定），停牌是临时状态，
+    必须每天重新检测——因为停牌债随时可能复牌。所以这里刻意保留对已停牌债的检测，
+    一旦恢复成交会自动置回 is_suspended=0（记入「复牌」）。
+
+    停牌债会被双低/强赎预警/下修提醒等所有策略排除：它们没有当日成交价，
+    策略若沿用停牌前的旧价（get_latest_quotes 取「最近非空」记录），会算出
+    虚假排名（2026-09-07 实际案例：中装转2 用 2025-09-03 的 89.726 排双低 rank 1）。
+    """
+    r = suspend.refresh_suspended_status()
+    line = suspend._summary(r)
+    print("停牌检测：" + line)
+    return line
+
+
+def _step_equal_weight_index():
+    """重算可转债等权指数（价格等权、基期 1000），幂等全量重算写 equal_weight_index。
+
+    顺序上有两个硬约束（历史踩过坑）：
+      - 必须在「行情 daily_close」之后：指数依赖当日收盘价算各债 chg%；
+      - 必须在「一致性校验」之前：校验比对的是「最新已存日」的 chg%，
+        若先校验后写入，每天校验的都是昨天的值，会掩盖「今天没更新」这个事实
+        （2026-08-31~2026-09-03 就是这么静默停更 4 天的）。
+    """
+    latest = db.compute_equal_weight_index()
+    if not latest:
+        raise RuntimeError("等权指数计算无结果（daily_close 样本不足或全为空）")
+    return "最新 %s 指数 %.2f 均价 %.2f (n=%s)" % (
+        latest.get("trade_date"), latest.get("index_value") or 0.0,
+        latest.get("avg_price") or 0.0, latest.get("sample_n"))
+
+
 def _step_verify_integrity():
     """关键数据一致性校验（回归防护）：
 
@@ -175,16 +221,18 @@ def main():
     print("[collect] 每日采集总入口启动 @ %s  trigger=%s run_id=%s"
           % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), trigger, run_id))
 
-    # 顺序：行情 -> 基础数据 -> 退市检测 -> 小盘债 -> 剩余规模 -> 到期赎回价 -> 当前转股价 -> 财务 -> 一致性校验
+    # 顺序：行情 -> 基础数据 -> 退市检测 -> 小盘债 -> 剩余规模 -> 到期赎回价 -> 当前转股价 -> 财务 -> 等权指数 -> 一致性校验
     steps = [
         ("行情 daily_close", lambda: crawler.fetch_daily_all()),
         ("基础数据 seed_bonds", seed_bonds.main),
         ("退市检测 backfill_delist_status", _step_detect_delist),
+        ("停牌检测 suspend_detection", _step_detect_suspend),
         ("小盘债 mini_bond", lambda: (mini_bond.ensure_columns(), mini_bond.refresh_all())),
         ("剩余规模 remaining_scale", checkup.refresh_remaining_scales),
         ("到期赎回价 redeem_price", checkup.refresh_redeem_prices),
         ("当前转股价 transfer_price", checkup.refresh_transfer_prices),
         ("正股财务 stock_finance", lambda: _step_stock_finance(force)),
+        ("等权指数 equal_weight_index", _step_equal_weight_index),
         ("一致性校验 verify_integrity", _step_verify_integrity),
     ]
     results = []
@@ -192,11 +240,11 @@ def main():
         results.append(_run_step(run_id, i, name, fn))
     r1, r2 = results[0], results[1]
 
-    # 汇总判定：核心步骤（行情/基础）成功 + 非阻塞步骤可失败。
-    # 一致性校验（第 9 步）失败仅记 warning，不影响 success/failed；它本身有退出码，
+    # 汇总判定：核心步骤（行情/基础/…/等权指数）成功 + 非阻塞步骤可失败。
+    # 一致性校验（第 10 步）失败仅记 warning，不影响 success/failed；它本身有退出码，
     # 写 collect_steps 即可被管理后台看到。
-    core_results = results[:8]
-    verify_result = results[8]
+    core_results = results[:10]
+    verify_result = results[10]
     ok_all = all(core_results)
     if ok_all:
         final_status = "success"
@@ -204,9 +252,9 @@ def main():
         final_status = "partial"   # 次要步骤失败，但核心数据可用
     else:
         final_status = "failed"
-    notes = ("行情=%s 基础=%s 退市检测=%s 小盘=%s 剩余规模=%s 赎回价=%s 转股价=%s 财务=%s 一致性=%s，总耗时 %.1fs" % (
-        results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[7], results[8],
-        time.time() - t_all))
+    notes = ("行情=%s 基础=%s 退市检测=%s 停牌检测=%s 小盘=%s 剩余规模=%s 赎回价=%s 转股价=%s 财务=%s 等权指数=%s 一致性=%s，总耗时 %.1fs" % (
+        results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[7],
+        results[8], results[9], results[10], time.time() - t_all))
     if not verify_result:
         notes += " ⚠ 一致性校验失败：双低快照或等权指数回归，请查管理后台/管理后台/collect-logs"
     db.finish_collect_run(run_id, final_status, notes=notes)

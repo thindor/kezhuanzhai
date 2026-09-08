@@ -22,7 +22,8 @@ from config import EM_BASE, EM_HEADERS, THS_BASE
 from db import get_conn, upsert_bond, delete_holders, insert_holders, compute_delist, \
     get_bonds_with_down_revise, get_active_trading_bonds, upsert_daily_close, get_daily_close, \
     get_bond, get_latest_quotes, save_double_low_snapshot, get_latest_double_low, get_double_low_change, _now_str, \
-    get_redeemed_bond_codes, get_periods_info, save_stock_finance
+    get_redeemed_bond_codes, get_periods_info, save_stock_finance, \
+    get_suspended_bond_codes, get_recent_trade_dates
 
 # akshare 作为可转债事件（强赎/不强赎/下修）的兜底信息源（集思录接口在本机可用）。
 # 导入失败时降级为空实现，不影响其它爬虫。
@@ -1142,9 +1143,16 @@ def compute_redemption_warning(bond_code):
 
 
 def compute_redemption_warnings():
-    """返回全市场强赎预警 dict：{bond_code: warn_dict}，遍历在交易转债。"""
+    """返回全市场强赎预警 dict：{bond_code: warn_dict}，遍历在交易转债。
+
+    排除停牌债：停牌期间没有当日收盘价，「收盘≥转股价130%」的计数会停在停牌前，
+    既不能反映真实强赎进度，也会给出误导性的「预计 N 日内触发」。
+    """
+    suspended = get_suspended_bond_codes()
     res = {}
     for b in get_active_trading_bonds():
+        if b["bond_code"] in suspended:
+            continue
         w = compute_redemption_warning(b["bond_code"])
         if w:
             res[b["bond_code"]] = w
@@ -1236,9 +1244,16 @@ def compute_down_revise_warning(bond_code):
 
 
 def compute_down_revise_warnings():
-    """返回全市场下修提醒 dict：{bond_code: warn_dict}，遍历在交易转债。"""
+    """返回全市场下修提醒 dict：{bond_code: warn_dict}，遍历在交易转债。
+
+    排除停牌债：停牌无当日收盘价，「收盘≤转股价85%」的计数会停在停牌前，
+    提醒失去时效性。
+    """
+    suspended = get_suspended_bond_codes()
     res = {}
     for b in get_active_trading_bonds():
+        if b["bond_code"] in suspended:
+            continue
         w = compute_down_revise_warning(b["bond_code"])
         if w:
             res[b["bond_code"]] = w
@@ -1299,9 +1314,15 @@ def compute_double_low_list(topn=20):
     """
     res = []
     redeemed = get_redeemed_bond_codes()
+    # 停牌债直接剔除：无当日成交价，不该出现在任何策略里
+    suspended = get_suspended_bond_codes()
+    # 行情新鲜度窗口：最近 5 个交易日
+    recent_days = set(get_recent_trade_dates(5))
     for b in get_active_trading_bonds():
         code = b["bond_code"]
         if code in redeemed:
+            continue
+        if code in suspended:
             continue
         try:
             tp = float(b.get("current_transfer_price") or 0)
@@ -1313,6 +1334,17 @@ def compute_double_low_list(topn=20):
         if not g:
             continue
         q = get_latest_quotes(code)
+        # ⚠️ 行情新鲜度守卫（2026-09-07 事故修复）：
+        # get_latest_quotes 取的是「最近一条非空」记录，停牌/长期无成交的债会返回
+        # 停牌前的旧价——中装转2 因此用 2025-09-03 的 89.726 算出双低 98.03 占据 rank 1，
+        # 而它自 2025-09-03 起已停牌整整一年。这类僵尸价排出的名次毫无意义。
+        # 故要求转债价与正股价都来自最近 5 个交易日，否则视为不可交易，跳过。
+        # 这是停牌标记之外的第二道防线：即使 is_suspended 缺失或滞后也兜得住。
+        if recent_days:
+            if q.get("bond_date") not in recent_days:
+                continue
+            if q.get("stock_date") not in recent_days:
+                continue
         # 转债价：仅采用 daily_close 最新收盘价。
         # ⚠️ 严格禁止从 bonds.current_price 兜底——新债/未上市债的 current_price 恒为 100.0
         # （占位面值），用它兜底会让未上市债以 100 元 + 任意溢价率被算进双低，

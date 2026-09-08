@@ -344,6 +344,56 @@ def inject_redeemed():
     return {"redeemed_bond_codes": redeemed, "redeem_badge": redeem_badge}
 
 
+@app.context_processor
+def inject_bond_status():
+    """全局注入「停牌 / 退市」状态集合与打标函数，供所有列表页在转债名后标记。
+
+    与 inject_redeemed 的「强赎」标共同构成三种状态提示：
+      - 停牌：无当日成交，价格停留在停牌前（僵尸价），已排除出所有策略
+      - 退市：已摘牌，数据冻结仅供查阅
+      - 强赎：已发布强赎公告，需及时卖出或转股
+    """
+    suspended = db.get_suspended_bond_codes()
+    delisted = db.get_delisted_bond_codes()
+    # 强赎集合必须在本函数内自取：redeem_badge 是另一个 context_processor 的局部函数，
+    # 跨 processor 引用会 NameError（曾导致 /bonds 与 /bond/<code> 全部 500）。
+    redeemed = get_redeemed_bond_codes()
+
+    def suspend_badge(code):
+        if code and code in suspended:
+            return Markup('<span class="badge-suspend" title="已停牌：无当日成交，'
+                          '价格停留在停牌前，不参与双低等任何策略">停牌</span>')
+        return Markup('')
+
+    def delist_badge(code):
+        if code and code in delisted:
+            return Markup('<span class="badge-delisted" title="已退市/摘牌，'
+                          '数据冻结仅供查阅">退市</span>')
+        return Markup('')
+
+    def bond_badges(code):
+        """一次性输出该转债的全部状态徽章（停牌/退市/强赎），便于模板统一调用。
+
+        自包含实现（不调用 suspend_badge/delist_badge/redeem_badge 之外的外部函数），
+        避免跨 context_processor 引用局部函数导致 NameError。
+        """
+        parts = []
+        if code and code in suspended:
+            parts.append('<span class="badge-suspend" title="已停牌：无当日成交，'
+                         '价格停留在停牌前，不参与双低等任何策略">停牌</span>')
+        if code and code in delisted:
+            parts.append('<span class="badge-delisted" title="已退市/摘牌，'
+                         '数据冻结仅供查阅">退市</span>')
+        if code and code in redeemed:
+            parts.append('<span class="badge-redeem" title="已发布强赎公告，'
+                         '注意及时卖出或转股">强赎</span>')
+        return Markup("".join(parts))
+
+    return {"suspended_bond_codes": suspended, "delisted_bond_codes": delisted,
+            "suspend_badge": suspend_badge, "delist_badge": delist_badge,
+            "bond_badges": bond_badges}
+
+
 # ---------------- 公开查询 ----------------
 @app.route("/")
 def index():

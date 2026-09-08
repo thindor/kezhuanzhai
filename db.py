@@ -1149,6 +1149,89 @@ def compute_delist(row):
     return is_delisted, delist_date
 
 
+def ensure_suspend_columns():
+    """幂等补齐「停牌检测」需要的 bonds 列。
+
+    SQLite 不支持 ADD COLUMN IF NOT EXISTS，故先 PRAGMA 判重再 ALTER。
+      - is_suspended        停牌标记（1=停牌/当日无成交）
+      - suspended_since     最后仍有行情的交易日（可视作停牌起点）
+      - suspend_checked_at  最近一次检测时间
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(bonds)")
+    cols = [r[1] for r in cur.fetchall()]
+    for col, ctype in [("is_suspended", "INTEGER DEFAULT 0"),
+                       ("suspended_since", "TEXT"),
+                       ("suspend_checked_at", "TEXT")]:
+        if col not in cols:
+            cur.execute("ALTER TABLE bonds ADD COLUMN %s %s" % (col, ctype))
+    conn.commit()
+    conn.close()
+
+
+def get_suspended_bond_codes():
+    """返回停牌中的转债代码集合（is_suspended=1），供各策略统一排除。
+
+    背景（2026-09-07 真实事故）：127033 中装转2 自 2025-09-03 起停牌，
+    daily_close 长期无有效收盘价，但双低策略仍用「最近一条非空收盘价」
+    （2025-09-03 的 89.726）算出双低 98.03，占据 rank 1——用一年前的僵尸价
+    排出的第一名完全是误导。故任何依赖现价/溢价率的策略都必须剔除停牌债。
+
+    查询异常时返回空集（不误剔，宁可漏排也不误杀）。
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT bond_code FROM bonds WHERE COALESCE(is_suspended,0)=1").fetchall()
+        conn.close()
+        return {r[0] for r in rows}
+    except Exception:
+        return set()
+
+
+def get_delisted_bond_codes():
+    """返回已退市转债代码集合（is_delisted=1），供列表页统一打「退市」标。
+
+    查询异常时返回空集（不误标）。
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT bond_code FROM bonds WHERE COALESCE(is_delisted,0)=1").fetchall()
+        conn.close()
+        return {r[0] for r in rows}
+    except Exception:
+        return set()
+
+
+def get_bonds_for_suspend_check():
+    """返回待做停牌检测的转债（未退市 + 已上市 + 未到期）。
+
+    注意：这里**不能**排除 is_suspended=1 的债——停牌债必须继续被检测，
+    否则一旦复牌也发现不了，会永远卡在停牌状态。
+    返回 list[dict(bond_code, bond_name, stock_code)]。
+    """
+    import datetime as _dt
+    today = _dt.date.today().strftime("%Y-%m-%d")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT bond_code, bond_name, stock_code
+        FROM bonds
+        WHERE COALESCE(is_delisted, 0) = 0
+          AND (expire_date IS NULL OR expire_date >= ?)
+          AND (listing_date IS NULL OR listing_date <= ?)
+        ORDER BY bond_code
+    """, (today, today))
+    rows = [{"bond_code": r[0], "bond_name": r[1], "stock_code": r[2]}
+            for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
 def backfill_delist_status():
     """按已存储的到期日/摘牌日，幂等回填 bonds 表的 is_delisted / delist_date。
 
@@ -1410,17 +1493,35 @@ def get_active_trading_bonds():
 # ============ 双低策略轮动快照 ============
 
 def get_latest_quotes(bond_code):
-    """返回某转债最新非空转债价与正股价（分别取各自最近交易日，互不对齐）。"""
+    """返回某转债最新非空转债价与正股价（分别取各自最近交易日，互不对齐）。
+
+    ⚠️ 陷阱：这里取的是「最近一条**非空**」记录，停牌债因此会拿到停牌前的旧价
+    （如 127033 中装转2 停牌一年，仍返回 2025-09-03 的 89.726）。
+    故同时返回 bond_date / stock_date，调用方（双低等策略）**必须**做行情新鲜度校验，
+    否则僵尸价会被当成当日价参与排名。
+    """
     conn = get_conn()
     cur = conn.cursor()
     bc = cur.execute(
-        "SELECT bond_close FROM daily_close WHERE bond_code=? AND bond_close IS NOT NULL "
+        "SELECT trade_date, bond_close FROM daily_close WHERE bond_code=? AND bond_close IS NOT NULL "
         "ORDER BY trade_date DESC LIMIT 1", (bond_code,)).fetchone()
     sc = cur.execute(
-        "SELECT stock_close FROM daily_close WHERE bond_code=? AND stock_close IS NOT NULL "
+        "SELECT trade_date, stock_close FROM daily_close WHERE bond_code=? AND stock_close IS NOT NULL "
         "ORDER BY trade_date DESC LIMIT 1", (bond_code,)).fetchone()
     conn.close()
-    return {"bond_close": bc[0] if bc else None, "stock_close": sc[0] if sc else None}
+    return {"bond_close": bc[1] if bc else None, "bond_date": bc[0] if bc else None,
+            "stock_close": sc[1] if sc else None, "stock_date": sc[0] if sc else None}
+
+
+def get_recent_trade_dates(n=5):
+    """返回最近 n 个交易日的日期列表（降序），供「行情新鲜度」校验使用。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT DISTINCT trade_date FROM daily_close "
+        "ORDER BY trade_date DESC LIMIT ?", (n,)).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 
 def save_double_low_snapshot(week_start, rows):

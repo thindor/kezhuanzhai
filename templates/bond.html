@@ -70,7 +70,7 @@
   </nav>
 
   <div class="bond-head">
-    <h2>{{ bond.bond_name or '未知转债' }} <span class="code">{{ code }}</span>{% if bond.is_delisted %} <span class="delist-badge">已退市</span>{% endif %} <a class="checkup-link" href="{{ url_for('bond_checkup', code=code) }}">🩺 转债体检卡</a></h2>
+    <h2>{{ bond.bond_name or '未知转债' }} <span class="code">{{ code }}</span>{{ bond_badges(code) }} <a class="checkup-link" href="{{ url_for('bond_checkup', code=code) }}">🩺 转债体检卡</a></h2>
     <p class="sub">正股：{{ bond.stock_name or '-' }}（{{ bond.stock_code or '-' }}）· 评级：{{ bond.rating or '-' }} · 数据来源：{{ bond.data_source or '东方财富' }}</p>
     <div class="act-bar">
       {% if admin %}<button class="act-btn {{ 'watched' if watched }}" id="watchBtn" onclick="toggleWatch()">{{ '✓ 已关注' if watched else '★ 加入关注' }}</button>{% endif %}
