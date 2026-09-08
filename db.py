@@ -1207,6 +1207,76 @@ def get_delisted_bond_codes():
         return set()
 
 
+def ensure_stock_flag_columns():
+    """幂等补齐「正股标签」需要的 bonds 列。
+
+    SQLite 不支持 ADD COLUMN IF NOT EXISTS，故先 PRAGMA 判重再 ALTER。
+      - stock_is_st             正股被 ST / *ST / 退市整理期（1=是）
+      - stock_is_bank           正股为银行（1=是）
+      - stock_flags_checked_at  最近一次标签检测时间
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(bonds)")
+    cols = [r[1] for r in cur.fetchall()]
+    for col, ctype in [("stock_is_st", "INTEGER DEFAULT 0"),
+                       ("stock_is_bank", "INTEGER DEFAULT 0"),
+                       ("stock_flags_checked_at", "TEXT")]:
+        if col not in cols:
+            cur.execute("ALTER TABLE bonds ADD COLUMN %s %s" % (col, ctype))
+    conn.commit()
+    conn.close()
+
+
+def get_st_bond_codes():
+    """返回「正股被 ST / *ST / 处于退市整理期」的转债代码集合。
+
+    问题债：正股已被风险警示意味着基本面恶化、退市风险上升，其转债的
+    「低价格」往往是信用风险定价而非低估，双低策略必须回避。
+
+    查询异常时返回空集（不误剔）。
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT bond_code FROM bonds WHERE COALESCE(stock_is_st,0)=1").fetchall()
+        conn.close()
+        return {r[0] for r in rows}
+    except Exception:
+        return set()
+
+
+def get_bank_bond_codes():
+    """返回「正股为银行」的转债代码集合。
+
+    银行转债普遍 AAA 评级、规模大、价格波动小，双低值天然偏低而长期占用
+    双低榜前排名额，但转股溢价率高（正股破净导致转股价下不去）、弹性极差，
+    很难触发强赎——与「打强赎为主」的收益逻辑不符，故双低策略回避。
+
+    查询异常时返回空集（不误剔）。
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT bond_code FROM bonds WHERE COALESCE(stock_is_bank,0)=1").fetchall()
+        conn.close()
+        return {r[0] for r in rows}
+    except Exception:
+        return set()
+
+
+def get_double_low_excluded_codes():
+    """双低策略排除名单 = 银行正股债 ∪ ST/退市整理正股债。
+
+    ⚠️ 仅用于双低策略。下修提醒 / 强赎预警**不得**调用本函数——
+    「问题债下修促转股」正是本项目的核心研究方向之一，ST 债在下修场景
+    里是重点标的而非排除项。
+    """
+    return get_bank_bond_codes() | get_st_bond_codes()
+
+
 def get_bonds_for_suspend_check():
     """返回待做停牌检测的转债（未退市 + 已上市 + 未到期）。
 
@@ -1685,6 +1755,22 @@ def _close_on_or_before(closes, code, date):
     return res
 
 
+def _close_pair_on_or_before(closes, code, date):
+    """取 code 在 <= date 的最近一个交易日 (trade_date, close)，用于标注价格截至日期。"""
+    arr = closes.get(code)
+    if not arr:
+        return (None, None)
+    lo, hi, res = 0, len(arr) - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if arr[mid][0] <= date:
+            res = arr[mid]
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return res if res else (None, None)
+
+
 def get_latest_data_date():
     """返回 daily_close 中最新的交易日（即全站行情/数据更新截至日期）。
 
@@ -1787,13 +1873,62 @@ def get_double_low_holds():
         ew, ep_snap = first_seen.get(code, (latest_ws, r["bond_price"]))
         entry_price = real_price(code, ew, ep_snap)
         cur_price = real_price(code, "2099-12-31", r["bond_price"])  # 最新可得收盘
+        cur_date, _ = _close_pair_on_or_before(closes, code, "2099-12-31")
         ret = None
         if entry_price and cur_price and entry_price > 0:
             ret = (cur_price - entry_price) / entry_price * 100.0
         rows.append({**r, "entry_week": ew,
                      "entry_price": round(entry_price, 2) if entry_price else None,
-                     "hold_return": round(ret, 2) if ret is not None else None})
+                     "hold_return": round(ret, 2) if ret is not None else None,
+                     # 最新收盘价（与 hold_return 同源，保证价格列与收益列对得上）
+                     "cur_price": round(cur_price, 2) if cur_price else None,
+                     "price_date": cur_date})
     return rows
+
+
+UNIT_PER_BOND = 10000.0   # 双低轮动资金口径：等权，每只 1 万元
+
+
+def get_double_low_holds_summary(holds=None):
+    """当前持仓组合汇总（等权每只 1 万元，浮动盈亏实时算、不落库）。
+
+    口径说明：
+    - 组合收益率 = 各只持有收益率的等权算术平均（每只金额相等，算术平均即组合收益率）
+    - 浮动盈亏金额 = Σ(1 万 × 单只收益率)；总市值 = 成本 + 浮动盈亏
+    - as_of = 持仓估值所依据的最新收盘价日期（取各只中最晚者）
+    - 仅统计能算出收益的持仓；停牌/无价债不计入（与策略过滤口径一致）
+    """
+    if holds is None:
+        holds = get_double_low_holds()
+    if not holds:
+        return None
+    pairs = [(r.get("hold_return"), r) for r in holds if r.get("hold_return") is not None]
+    if not pairs:
+        return None
+    n = len(pairs)
+    avg = sum(p[0] for p in pairs) / n
+    total_cost = UNIT_PER_BOND * n
+    total_mv = sum(UNIT_PER_BOND * (1 + p[0] / 100.0) for p in pairs)
+    pnl = total_mv - total_cost
+    win = sum(1 for p in pairs if p[0] > 0)
+    loss = sum(1 for p in pairs if p[0] < 0)
+    dates = [r.get("price_date") for _, r in pairs if r.get("price_date")]
+    best = max(pairs, key=lambda p: p[0])
+    worst = min(pairs, key=lambda p: p[0])
+    return {
+        "count": n,
+        "unit": UNIT_PER_BOND,
+        "avg_return": round(avg, 2),
+        "total_cost": round(total_cost, 2),
+        "total_mv": round(total_mv, 2),
+        "pnl": round(pnl, 2),
+        "win": win,
+        "loss": loss,
+        "flat": n - win - loss,
+        "as_of": max(dates) if dates else None,
+        "best": {"code": best[1]["bond_code"], "name": best[1]["bond_name"], "ret": best[0]},
+        "worst": {"code": worst[1]["bond_code"], "name": worst[1]["bond_name"], "ret": worst[0]},
+    }
 
 
 def get_redeemed_bond_codes():

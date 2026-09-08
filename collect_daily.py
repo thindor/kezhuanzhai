@@ -12,19 +12,30 @@
                                             ⚠️ 必须每天检测**含已停牌**的全部未退市债——若把停牌债排除，
                                             就永远发现不了它复牌，会永久卡在停牌状态。
                                             非交易时段（全市场零成交）自动跳过，防误判全市场停牌。
-  5) mini_bond.ensure_columns()+refresh_all()  刷新小盘债候选（现价/赎回价/历史最高）写回 bonds
-  6) checkup.refresh_remaining_scales()        剩余规模全量补全（主源集思录登录 cookie 经 bond_cb_jsl 拉全市场 ~500 只；
+  5) stock_flags.refresh_stock_flags()     【正股标签检测】腾讯行情取正股简称，判定
+                                            银行正股（名称含「银行」）/ ST·*ST·退市整理（正则 ^S?[*]?ST 或末尾「退」），
+                                            写 bonds.stock_is_st / stock_is_bank，并同步刷新 stock_name。
+                                            双低策略据此回避：银行债双低值天然低但弹性差难强赎；
+                                            ST 债的「便宜」是信用风险定价而非低估（问题债）。
+                                            ⚠️ 每日检测才能在被 ST 后「及时」发现；摘帽也会自动清除标记。
+  6) mini_bond.ensure_columns()+refresh_all()  刷新小盘债候选（现价/赎回价/历史最高）写回 bonds
+  7) checkup.refresh_remaining_scales()        剩余规模全量补全（主源集思录登录 cookie 经 bond_cb_jsl 拉全市场 ~500 只；
                                             未配置/失效 cookie 自动回退匿名 cb_list_new 前30活跃债，旧 crawler 保留；仅 UPDATE 有值项不置 NULL）
-  7) checkup.refresh_redeem_prices()        补全到期赎回价（东财全量基础解析写入 bonds.redeem_price）
-  8) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
-  9) crawler.collect_stock_finance()        正股财务指标（东财 F10 全量未退市债正股：总资产/总负债/有息负债率/总股本），
+  8) checkup.refresh_redeem_prices()        补全到期赎回价（东财全量基础解析写入 bonds.redeem_price）
+  9) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
+ 10) crawler.collect_stock_finance()        正股财务指标（东财 F10 全量未退市债正股：总资产/总负债/有息负债率/总股本），
                                             供「全部转债」高级筛选的 资产负债率/有息负债率/转债占比 使用（7 天守卫，财务为季更）
- 10) db.compute_equal_weight_index()        重算可转债等权指数（价格等权、基期 1000，幂等全量重算，写 equal_weight_index）。
+ 11) db.compute_equal_weight_index()        重算可转债等权指数（价格等权、基期 1000，幂等全量重算，写 equal_weight_index）。
                                             ⚠️ 顺序约束：必须在步骤 1 行情之后（依赖当日 daily_close 收盘价），
-                                            且必须在步骤 11 一致性校验之前（否则校验读到的仍是上一日旧值）。
+                                            且必须在步骤 13 一致性校验之前（否则校验读到的仍是上一日旧值）。
                                             历史坑：2026-08-27 从 fetch_daily.py 切换到本管道时漏了这一步，
                                             导致等权指数停在 2026-08-31，2026-09-04 补齐并加入管道。
- 11) verify_integrity()                     关键数据一致性校验（双低快照无未上市债/等权指数 chg% 与重算偏差 < 0.1%）；
+ 12) crawler.rotate_double_low()            【双低周一轮动】仅周一执行，且本周未跑过才跑（幂等）。
+                                            历史坑：此前轮动只在双低页「首次访问且无快照」时触发，
+                                            周一并无任何定时器，实际长期未自动轮动。故收口进每日管道。
+                                            ⚠️ 必须在步骤 13 一致性校验之前：校验会检查最新双低快照，
+                                            轮动后校验才能验到本周新快照。
+ 13) verify_integrity()                     关键数据一致性校验（双低快照无未上市债/等权指数 chg% 与重算偏差 < 0.1%）；
                                             失败仅写警告日志，不阻塞主流程（双低未上市债/等权指数算法均为高风险回归点）
 
   注：十大持有人随定期报告（中报/年报等）变化，更新频率低，不进每日自动管道，
@@ -60,6 +71,7 @@ import mini_bond
 import checkup
 import verify_integrity
 import suspend
+import stock_flags
 
 
 def _is_trading_day(dt=None):
@@ -148,6 +160,23 @@ def _step_detect_suspend():
     return line
 
 
+def _step_stock_flags():
+    """每日正股标签检测：银行正股 / ST·*ST·退市整理，写 bonds.stock_is_st / stock_is_bank。
+
+    数据源为腾讯行情的**正股**简称字段——A 股的风险警示直接体现在简称上
+    （ST中装 / *ST闻泰 / *ST三房 / xxx退），是权威且实时的口径，无需另接公告源。
+
+    为什么要每天跑：被 ST 是突发事件，只有每日扫描才能「及时」发现并让双低策略
+    在下一个轮动日把它调出。摘帽（ST→正常）同样每天可逆地清除。
+
+    行情对某只正股无返回时保持原状（不判定），避免网络抖动误标/误清。
+    """
+    r = stock_flags.refresh_stock_flags()
+    line = stock_flags._summary(r)
+    print("正股标签：" + line)
+    return line
+
+
 def _step_equal_weight_index():
     """重算可转债等权指数（价格等权、基期 1000），幂等全量重算写 equal_weight_index。
 
@@ -163,6 +192,38 @@ def _step_equal_weight_index():
     return "最新 %s 指数 %.2f 均价 %.2f (n=%s)" % (
         latest.get("trade_date"), latest.get("index_value") or 0.0,
         latest.get("avg_price") or 0.0, latest.get("sample_n"))
+
+
+def _step_rotate_double_low(force=False):
+    """双低周一轮动：计算前 20 双低并写入本周快照（进入/调出）。
+
+    守卫（幂等，防止同一周重复轮动把 entered/exited 算乱）：
+      1. 仅周一执行；
+      2. 本周快照已存在则跳过。
+    force=True 可绕过守卫（管理后台手动触发用）。
+
+    ⚠️ 历史坑：轮动此前只在双低页「首次访问且无快照」时触发，周一并没有任何
+    定时器，实际长期没有自动轮动过（老持仓一直挂着）。故收口进每日管道。
+    """
+    import datetime as _dt
+    today = _dt.date.today()
+    if today.weekday() != 0 and not force:
+        return "跳过（仅周一执行）"
+    monday = today - _dt.timedelta(days=today.weekday())
+    week_start = monday.strftime("%Y-%m-%d")
+    try:
+        prev = db.get_latest_double_low()
+    except Exception:
+        prev = None
+    if prev and prev.get("week_start") == week_start and not force:
+        return "本周已轮动（%s），跳过" % week_start
+
+    r = crawler.rotate_double_low()
+    ent = ", ".join(x["bond_name"] for x in r.get("entered", [])) or "无"
+    ext = ", ".join(x["bond_name"] for x in r.get("exited", [])) or "无"
+    line = "周 %s 轮动：新进 %s；调出 %s" % (week_start, ent, ext)
+    print("双低轮动：" + line)
+    return line
 
 
 def _step_verify_integrity():
@@ -221,18 +282,21 @@ def main():
     print("[collect] 每日采集总入口启动 @ %s  trigger=%s run_id=%s"
           % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), trigger, run_id))
 
-    # 顺序：行情 -> 基础数据 -> 退市检测 -> 小盘债 -> 剩余规模 -> 到期赎回价 -> 当前转股价 -> 财务 -> 等权指数 -> 一致性校验
+    # 顺序：行情 -> 基础数据 -> 退市检测 -> 停牌检测 -> 正股标签 -> 小盘债 -> 剩余规模
+    #       -> 到期赎回价 -> 当前转股价 -> 财务 -> 等权指数 -> 双低周一轮动 -> 一致性校验
     steps = [
         ("行情 daily_close", lambda: crawler.fetch_daily_all()),
         ("基础数据 seed_bonds", seed_bonds.main),
         ("退市检测 backfill_delist_status", _step_detect_delist),
         ("停牌检测 suspend_detection", _step_detect_suspend),
+        ("正股标签 stock_flags", _step_stock_flags),
         ("小盘债 mini_bond", lambda: (mini_bond.ensure_columns(), mini_bond.refresh_all())),
         ("剩余规模 remaining_scale", checkup.refresh_remaining_scales),
         ("到期赎回价 redeem_price", checkup.refresh_redeem_prices),
         ("当前转股价 transfer_price", checkup.refresh_transfer_prices),
         ("正股财务 stock_finance", lambda: _step_stock_finance(force)),
         ("等权指数 equal_weight_index", _step_equal_weight_index),
+        ("双低轮动 rotate_double_low", lambda: _step_rotate_double_low(force)),
         ("一致性校验 verify_integrity", _step_verify_integrity),
     ]
     results = []
@@ -241,10 +305,10 @@ def main():
     r1, r2 = results[0], results[1]
 
     # 汇总判定：核心步骤（行情/基础/…/等权指数）成功 + 非阻塞步骤可失败。
-    # 一致性校验（第 10 步）失败仅记 warning，不影响 success/failed；它本身有退出码，
+    # 一致性校验（第 13 步）失败仅记 warning，不影响 success/failed；它本身有退出码，
     # 写 collect_steps 即可被管理后台看到。
-    core_results = results[:10]
-    verify_result = results[10]
+    core_results = results[:12]
+    verify_result = results[12]
     ok_all = all(core_results)
     if ok_all:
         final_status = "success"
@@ -252,9 +316,11 @@ def main():
         final_status = "partial"   # 次要步骤失败，但核心数据可用
     else:
         final_status = "failed"
-    notes = ("行情=%s 基础=%s 退市检测=%s 停牌检测=%s 小盘=%s 剩余规模=%s 赎回价=%s 转股价=%s 财务=%s 等权指数=%s 一致性=%s，总耗时 %.1fs" % (
-        results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[7],
-        results[8], results[9], results[10], time.time() - t_all))
+    notes = ("行情=%s 基础=%s 退市检测=%s 停牌检测=%s 正股标签=%s 小盘=%s 剩余规模=%s 赎回价=%s "
+             "转股价=%s 财务=%s 等权指数=%s 双低轮动=%s 一致性=%s，总耗时 %.1fs" % (
+        results[0], results[1], results[2], results[3], results[4], results[5], results[6],
+        results[7], results[8], results[9], results[10], results[11], results[12],
+        time.time() - t_all))
     if not verify_result:
         notes += " ⚠ 一致性校验失败：双低快照或等权指数回归，请查管理后台/管理后台/collect-logs"
     db.finish_collect_run(run_id, final_status, notes=notes)

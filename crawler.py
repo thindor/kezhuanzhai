@@ -23,7 +23,8 @@ from db import get_conn, upsert_bond, delete_holders, insert_holders, compute_de
     get_bonds_with_down_revise, get_active_trading_bonds, upsert_daily_close, get_daily_close, \
     get_bond, get_latest_quotes, save_double_low_snapshot, get_latest_double_low, get_double_low_change, _now_str, \
     get_redeemed_bond_codes, get_periods_info, save_stock_finance, \
-    get_suspended_bond_codes, get_recent_trade_dates
+    get_suspended_bond_codes, get_recent_trade_dates, \
+    get_double_low_excluded_codes, get_st_bond_codes, get_bank_bond_codes
 
 # akshare 作为可转债事件（强赎/不强赎/下修）的兜底信息源（集思录接口在本机可用）。
 # 导入失败时降级为空实现，不影响其它爬虫。
@@ -1311,11 +1312,22 @@ def compute_double_low_list(topn=20):
     仅纳入在交易转债；转股价/价格/正股价任一缺失或非法则跳过。
     已公告强赎的转债（announcements.announce_type='强赎'）视为离场信号，直接剔除——
     这样它们在轮动时会被调出（卖出），并由排名下一位的转债补入，保持 20 只。
+
+    剔除名单（2026-09-08 扩充，用户要求）
+    ------------------------------------
+    1. 已退市 / 已公告强赎  —— 由 get_active_trading_bonds() 与 redeemed 覆盖
+    2. 停牌债              —— 无当日成交价，沿用僵尸价会排出假排名
+    3. 正股为银行          —— AAA 大盘、双低值天然低，但溢价率高、弹性差、难触发强赎，
+                              与「打强赎为主」的收益逻辑相悖，长期占用榜位
+    4. 正股 ST / *ST / 退市整理 —— 「便宜」是信用风险定价而非低估，问题债回避
+
+    ⚠️ 本剔除名单**仅**作用于双低策略。下修提醒 / 强赎预警不得套用：「问题债下修促
+    转股」正是本项目的核心研究方向，ST 债在下修场景里是重点标的而非排除项。
     """
     res = []
-    redeemed = get_redeemed_bond_codes()
-    # 停牌债直接剔除：无当日成交价，不该出现在任何策略里
-    suspended = get_suspended_bond_codes()
+    redeemed = get_redeemed_bond_codes()            # 已公告强赎：离场信号
+    suspended = get_suspended_bond_codes()          # 停牌：无当日成交价
+    excluded = get_double_low_excluded_codes()      # 银行正股债 ∪ ST/退市整理正股债
     # 行情新鲜度窗口：最近 5 个交易日
     recent_days = set(get_recent_trade_dates(5))
     for b in get_active_trading_bonds():
@@ -1323,6 +1335,8 @@ def compute_double_low_list(topn=20):
         if code in redeemed:
             continue
         if code in suspended:
+            continue
+        if code in excluded:
             continue
         try:
             tp = float(b.get("current_transfer_price") or 0)

@@ -44,6 +44,7 @@ from db import (init_db, get_bond, get_periods, get_periods_info, get_holders, l
                 get_double_low_change,
                 get_double_low_history,
                 get_double_low_holds,
+                get_double_low_holds_summary,
                 compute_market_overview, get_price_trend, get_new_bonds,
                 get_site_settings, save_site_settings,
                 get_latest_data_date, get_redeemed_bond_codes,
@@ -355,6 +356,9 @@ def inject_bond_status():
     """
     suspended = db.get_suspended_bond_codes()
     delisted = db.get_delisted_bond_codes()
+    # 正股标签：ST/退市整理（问题债）、银行（双低策略回避）
+    st_codes = db.get_st_bond_codes()
+    bank_codes = db.get_bank_bond_codes()
     # 强赎集合必须在本函数内自取：redeem_badge 是另一个 context_processor 的局部函数，
     # 跨 processor 引用会 NameError（曾导致 /bonds 与 /bond/<code> 全部 500）。
     redeemed = get_redeemed_bond_codes()
@@ -372,10 +376,12 @@ def inject_bond_status():
         return Markup('')
 
     def bond_badges(code):
-        """一次性输出该转债的全部状态徽章（停牌/退市/强赎），便于模板统一调用。
+        """一次性输出该转债的全部状态徽章，便于模板统一调用。
 
-        自包含实现（不调用 suspend_badge/delist_badge/redeem_badge 之外的外部函数），
-        避免跨 context_processor 引用局部函数导致 NameError。
+        徽章种类（严重度从高到低）：停牌 / 退市 / 强赎 → ST → 银行。
+
+        自包含实现（只引用本函数外层的集合变量，不调用其它 context_processor 的
+        局部函数），避免跨 processor 引用导致 NameError（曾致全站 500）。
         """
         parts = []
         if code and code in suspended:
@@ -387,9 +393,16 @@ def inject_bond_status():
         if code and code in redeemed:
             parts.append('<span class="badge-redeem" title="已发布强赎公告，'
                          '注意及时卖出或转股">强赎</span>')
+        if code and code in st_codes:
+            parts.append('<span class="badge-st" title="正股被 ST/*ST 或处于退市整理期：'
+                         '低价是信用风险定价而非低估，双低策略已回避">ST</span>')
+        if code and code in bank_codes:
+            parts.append('<span class="badge-bank" title="正股为银行：双低值天然偏低但'
+                         '溢价率高、弹性差、难触发强赎，双低策略已回避">银行</span>')
         return Markup("".join(parts))
 
     return {"suspended_bond_codes": suspended, "delisted_bond_codes": delisted,
+            "st_bond_codes": st_codes, "bank_bond_codes": bank_codes,
             "suspend_badge": suspend_badge, "delist_badge": delist_badge,
             "bond_badges": bond_badges}
 
@@ -874,7 +887,13 @@ def double_low():
             data = None
     holds = get_double_low_holds()
     history = get_double_low_history()
-    return render_template("double_low.html", data=data, holds=holds, history=history)
+    # 组合汇总（等权每只 1 万元口径，浮动盈亏实时算不落库）
+    try:
+        summary = get_double_low_holds_summary(holds)
+    except Exception:
+        summary = None
+    return render_template("double_low.html", data=data, holds=holds, history=history,
+                           summary=summary)
 
 
 @app.route("/new-bonds")

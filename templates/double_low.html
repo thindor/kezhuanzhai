@@ -35,6 +35,15 @@
     <p class="hint" style="margin:0">
       数据说明：转债价与正股价取每日收盘采集的最新收盘价（缺失时兜底实时库），转股溢价率 = (转债价 / 转股价值 − 1) × 100%，转股价值 = 100 / 转股价 × 正股价。双低组合<strong>不含已公告强赎的转债</strong>：持仓中标记「强赎」的转债，将于<strong>下一周一（轮动日）自动调出（卖出）并调入排名下一位的新债</strong>，保持 20 只；轮动快照每周一收盘后更新。
     </p>
+    <p class="note" style="margin:8px 0 0">
+      <strong>回避名单</strong>（2026-09-08 起）：以下转债<strong>不进双低榜</strong>，持仓中的会在<strong>下一轮动日自动调出</strong>——
+      <span class="badge-suspend">停牌</span> 无当日成交，沿用停牌前价格会排出假排名；
+      <span class="badge-delisted">退市</span> 已摘牌，数据冻结；
+      <span class="badge-redeem">强赎</span> 已公告强赎，离场信号；
+      <span class="badge-st">ST</span> 正股被 ST/*ST 或处于退市整理期——低价是<strong>信用风险定价而非低估</strong>；
+      <span class="badge-bank">银行</span> 正股为银行——双低值天然偏低长期占位，但正股破净使转股价下不去、溢价率高、弹性差，<strong>难触发强赎</strong>，与「打强赎为主」的收益逻辑相悖。
+      <br>⚠️ 回避名单<strong>仅</strong>作用于双低策略；<strong>下修提醒、强赎预警仍会纳入 ST 债</strong>——「问题债下修促转股」是本站重点研究方向，ST 债在下修场景里是标的而非排除项。
+    </p>
   </section>
 
   {% set cur = history[0] if history else (data if data else none) %}
@@ -78,6 +87,47 @@
     <p class="hint" style="margin:8px 0 0">本期轮动收益 = 本周调出债「持有期间收益（调入价→调出价）」的等权平均；仍持有的债未卖出不计入已实现收益。</p>
   </section>
 
+  {% if summary %}
+  <section class="panel holds-summary">
+    <div class="panel-head">
+      <h2>当前持仓收益（浮动）</h2>
+      {% if summary.as_of %}<span class="hint">价格截至 {{ summary.as_of }}</span>{% endif %}
+    </div>
+    <div class="sum-grid">
+      <div class="sum-card">
+        <span class="sum-label">组合收益率</span>
+        <b class="sum-val {% if summary.avg_return >= 0 %}up{% else %}down{% endif %}">{{ '%+.2f'|format(summary.avg_return) }}%</b>
+        <span class="sum-sub">{{ summary.count }} 只等权持有</span>
+      </div>
+      <div class="sum-card">
+        <span class="sum-label">浮动盈亏</span>
+        <b class="sum-val {% if summary.pnl >= 0 %}up{% else %}down{% endif %}">{{ summary.pnl|round|int }} 元</b>
+        <span class="sum-sub">每只 {{ summary.unit|int }} 元 × {{ summary.count }}</span>
+      </div>
+      <div class="sum-card">
+        <span class="sum-label">成本 → 市值</span>
+        <b class="sum-val">{{ summary.total_cost|round|int }} → {{ summary.total_mv|round|int }}</b>
+        <span class="sum-sub">单位：元</span>
+      </div>
+      <div class="sum-card">
+        <span class="sum-label">盈亏分布</span>
+        <b class="sum-val"><span class="up">{{ summary.win }} 赚</span> · <span class="down">{{ summary.loss }} 亏</span>{% if summary.flat %} · {{ summary.flat }} 平{% endif %}</b>
+      </div>
+      <div class="sum-card">
+        <span class="sum-label">最强 / 最弱</span>
+        <b class="sum-val sum-pair">
+          <a href="/bond/{{ summary.best.code }}">{{ summary.best.name }}</a>
+          <span class="{% if summary.best.ret >= 0 %}up{% else %}down{% endif %}">{{ '%+.2f'|format(summary.best.ret) }}%</span>
+          ／
+          <a href="/bond/{{ summary.worst.code }}">{{ summary.worst.name }}</a>
+          <span class="{% if summary.worst.ret >= 0 %}up{% else %}down{% endif %}">{{ '%+.2f'|format(summary.worst.ret) }}%</span>
+        </b>
+      </div>
+    </div>
+    <p class="hint" style="margin:8px 0 0">口径：等权每只 {{ summary.unit|int }} 元；调入价取调入周周一真实收盘价，现价取最新收盘价（实时盯市，不回写快照）。本区块为<strong>浮动盈亏</strong>（持仓未卖出，非已实现收益），与下方持仓表「累计收益」同源。</p>
+  </section>
+  {% endif %}
+
   <div class="table-wrap">
     <table class="rank">
       <thead>
@@ -105,7 +155,7 @@
           <td data-sort="{{ r.stock_name or '' }}">{% if r.stock_name %}{{ r.stock_name }}{% else %}-{% endif %}</td>
           <td data-sort="{{ r.rating or '' }}">{{ r.rating or '-' }}</td>
           <td class="num" data-sort="{{ '%.4f'|format(r.double_low|float) }}"><b>{{ '%.2f'|format(r.double_low|float) }}</b></td>
-          <td class="num" data-sort="{{ '%.4f'|format(r.bond_price|float) }}">{{ '%.2f'|format(r.bond_price|float) }}</td>
+          <td class="num" data-sort="{{ '%.4f'|format((r.cur_price or r.bond_price)|float) }}">{{ '%.2f'|format((r.cur_price or r.bond_price)|float) }}</td>
           <td class="num" data-sort="{{ '%.4f'|format(r.premium_rate|float) }}">{{ '%.2f'|format(r.premium_rate|float) }}%</td>
           <td data-sort="{{ r.entry_week or '' }}">{% if r.entry_week %}{{ r.entry_week[5:] }}{% else %}-{% endif %}</td>
           <td class="num" data-sort="{{ '%.4f'|format(r.entry_price|float) if r.entry_price else 0 }}">{% if r.entry_price %}{{ '%.2f'|format(r.entry_price|float) }}{% else %}-{% endif %}</td>
@@ -187,6 +237,18 @@
   .hist-detail{padding:6px 16px 14px}
   .hist-sub{margin:8px 0 4px;font-size:13px}
   .rot-list.compact li{font-size:13px;padding:4px 0}
+  /* 涨跌通用色（涨红跌绿）：持仓表「累计收益」列的 up/down 此前无定义，一并补上 */
+  .up{color:#cf1322}
+  .down{color:#389e0d}
+  .sum-grid{display:flex;gap:12px;flex-wrap:wrap;margin-top:4px}
+  .sum-card{flex:1;min-width:158px;border:1px solid #eef0f4;border-radius:12px;background:#fff;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,.04);display:flex;flex-direction:column;gap:3px}
+  .sum-label{color:#9aa3b2;font-size:12.5px}
+  .sum-val{font-size:21px;font-weight:800;color:#1a2b50;font-variant-numeric:tabular-nums;line-height:1.18}
+  .sum-val.up,.sum-val .up{color:#cf1322}
+  .sum-val.down,.sum-val .down{color:#389e0d}
+  .sum-sub{color:#9aa3b2;font-size:12px}
+  .sum-pair{font-size:14px;font-weight:700;line-height:1.65}
+  @media(max-width:860px){.sum-card{min-width:calc(50% - 6px)}}
 </style>
 <script>
 (function(){
