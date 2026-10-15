@@ -120,6 +120,8 @@ tr:hover { background: #f7f9ff; }
 .login button { padding: 10px; border: none; border-radius: 8px; background: #2f6fed; color: #fff; cursor: pointer; font-size: 15px; }
 .error { color: #d4380d; font-size: 14px; }
 .hint { color: #888; font-size: 12px; }
+/* 榜单「最新报告期」列：弱化显示，避免抢走市值/名称的视觉重心 */
+table.rank td.rp { color: #6b7280; font-size: 12px; white-space: nowrap; }
 
 /* ---------------- 通用面板 / 榜单（persons、person 页面） ---------------- */
 .panel { background:#fff; border:1px solid #eef0f4; border-radius:14px; padding:18px 20px; margin:18px 0; box-shadow:0 1px 3px rgba(0,0,0,.05); }
@@ -351,6 +353,13 @@ table.rank.down-revise td { white-space:nowrap; }
 /* 持有人详情页：汇总表里已退市转债行弱化显示（不计入合计市值） */
 .delisted-row { opacity:.55; }
 .delisted-row td.mv { color:#aab1bd; }
+
+/* 持有人页：按报告期倒序展示（最新一期置顶高亮，历史报告期淡化） */
+tr.period-latest { background:#f5f9ff; }
+tr.period-latest td:first-child { box-shadow: inset 3px 0 0 #2f6bff; }
+tr.period-latest td.mv { color:#0a7d3e; }
+tr.period-older { opacity:.68; }
+tr.period-older.delisted-row { opacity:.45; }
 .delist-banner { margin:12px 0 4px; padding:10px 16px; border-radius:12px; background:#f1f3f5; border:1px solid #e3e8f0; color:#868e96; font-size:13.5px; }
 
 /* 已公告强赎：最醒目红底白字横幅（区别于强赎预警的浅红提示） */

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>多策略轮动对比 - {{ site_name }}</title>
+<meta name="description" content="可转债多策略轮动对比：双低策略、小额债策略（剩余规模小于4亿）、低价债策略，同池同权重每周轮动，横向比较收益曲线与持仓明细。">
+<meta name="keywords" content="可转债策略,双低策略,小额债,低价债,转债轮动,等权组合,可转债收益对比">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="{{ request.url_root }}strategies">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include '_nav.html' %}
+<div class="container">
+
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">
+      <svg class="home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      首页
+    </a>
+    <span class="current">多策略轮动</span>
+  </nav>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h1>多策略轮动对比</h1>
+      {% if start %}<span class="hint">建仓日 {{ start }} · 每周一轮动</span>{% endif %}
+    </div>
+    <p class="hint">三个策略共用<strong>同一个候选池</strong>（未退市、未停牌、未公告强赎、有真实成交价）、同样取 <strong>{{ topn }} 只</strong>、同样<strong>等权每只 1 万元</strong>、同样<strong>每周一轮动</strong>，唯一区别是排序规则——这样收益才有可比性。灰色虚线是<strong>可转债等权指数</strong>，作为跑赢/跑输的基准。</p>
+
+    {% if chart.labels %}
+    <div class="chart-wrap" style="margin-top:14px">
+      <canvas id="cmpChart" height="300"></canvas>
+    </div>
+    {% else %}
+    <p class="empty small">暂无可比数据，等待首次轮动后生成曲线。</p>
+    {% endif %}
+  </section>
+
+  {% for it in items %}
+  <section class="panel">
+    <div class="panel-head">
+      <h2>{{ it.name }}</h2>
+      <span class="hint">{{ it.rule }} · 取 {{ topn }} 只 · 第 {{ it.weeks|length }} 期{% if it.week_start %}（{{ it.week_start }}）{% endif %}</span>
+    </div>
+    <p class="hint">{{ it.desc|safe }}</p>
+
+    {% if it.summary %}
+    <div class="sum-grid">
+      <div class="sum-card">
+        <span class="sum-label">组合收益率</span>
+        <b class="sum-val {% if it.summary.avg_return >= 0 %}up{% else %}down{% endif %}">{{ '%+.2f'|format(it.summary.avg_return) }}%</b>
+        <span class="sum-sub">{{ it.summary.count }} 只等权持有</span>
+      </div>
+      <div class="sum-card">
+        <span class="sum-label">浮动盈亏</span>
+        <b class="sum-val {% if it.summary.pnl >= 0 %}up{% else %}down{% endif %}">{{ it.summary.pnl|round|int }} 元</b>
+        <span class="sum-sub">每只 {{ it.summary.unit|int }} 元 × {{ it.summary.count }}</span>
+      </div>
+      <div class="sum-card">
+        <span class="sum-label">成本 → 市值</span>
+        <b class="sum-val">{{ it.summary.total_cost|round|int }} → {{ it.summary.total_mv|round|int }}</b>
+        <span class="sum-sub">单位：元</span>
+      </div>
+      <div class="sum-card">
+        <span class="sum-label">盈亏分布</span>
+        <b class="sum-val"><span class="up">{{ it.summary.win }} 赚</span> · <span class="down">{{ it.summary.loss }} 亏</span>{% if it.summary.flat %} · {{ it.summary.flat }} 平{% endif %}</b>
+      </div>
+      <div class="sum-card">
+        <span class="sum-label">最强 / 最弱</span>
+        <b class="sum-val sum-pair">
+          <a href="/bond/{{ it.summary.best.code }}">{{ it.summary.best.name }}</a>
+          <span class="{% if it.summary.best.ret >= 0 %}up{% else %}down{% endif %}">{{ '%+.2f'|format(it.summary.best.ret) }}%</span>
+          ／
+          <a href="/bond/{{ it.summary.worst.code }}">{{ it.summary.worst.name }}</a>
+          <span class="{% if it.summary.worst.ret >= 0 %}up{% else %}down{% endif %}">{{ '%+.2f'|format(it.summary.worst.ret) }}%</span>
+        </b>
+      </div>
+    </div>
+    {% if it.summary.as_of %}<p class="hint" style="margin:8px 0 0">价格截至 {{ it.summary.as_of }}</p>{% endif %}
+    {% endif %}
+
+    {% if it.change and it.change.prev_week_start %}
+    <p class="hint" style="margin:10px 0 0">
+      上期（{{ it.change.prev_week_start }}）变动：
+      新进 {% if it.change.entered %}{% for r in it.change.entered %}<a class="link" href="/bond/{{ r.bond_code }}">{{ r.bond_name }}</a>{% if not loop.last %}、{% endif %}{% endfor %}{% else %}无{% endif %}；
+      调出 {% if it.change.exited %}{% for r in it.change.exited %}<a class="link" href="/bond/{{ r.bond_code }}">{{ r.bond_name }}</a>{% if not loop.last %}、{% endif %}{% endfor %}{% else %}无{% endif %}
+    </p>
+    {% endif %}
+
+    <div class="table-wrap">
+      <table class="rank">
+        <thead>
+          <tr>
+            <th class="sortable" data-type="num">排名</th>
+            <th class="sortable" data-type="text">转债</th>
+            <th class="sortable" data-type="text">正股</th>
+            <th class="sortable" data-type="text">评级</th>
+            <th class="sortable" data-type="num">{{ it.metric_label }}</th>
+            <th class="sortable" data-type="num">现价</th>
+            <th class="sortable" data-type="num">溢价率</th>
+            <th class="sortable" data-type="num">剩余年限</th>
+            <th class="sortable" data-type="text">调入周</th>
+            <th class="sortable" data-type="num">调入价</th>
+            <th class="sortable" data-type="num">累计收益</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in it.holds %}
+          <tr>
+            <td data-sort="{{ r.rank }}">{{ r.rank }}</td>
+            <td data-sort="{{ r.bond_code }}">
+              <a class="nm" href="/bond/{{ r.bond_code }}">{{ r.bond_code }}</a>
+              <a class="link" href="/bond/{{ r.bond_code }}">{{ r.bond_name or '-' }}</a>{{ bond_badges(r.bond_code) }}
+            </td>
+            <td data-sort="{{ r.stock_name or '' }}">{{ r.stock_name or '-' }}</td>
+            <td data-sort="{{ r.rating or '' }}">{{ r.rating or '-' }}</td>
+            <td class="num" data-sort="{{ '%.4f'|format(r.metric_value|float) if r.metric_value is not none else 0 }}"><b>{% if r.metric_value is not none %}{{ '%.2f'|format(r.metric_value|float) }}{% else %}-{% endif %}</b></td>
+            <td class="num" data-sort="{{ '%.4f'|format((r.cur_price or r.bond_price)|float) }}">{{ '%.2f'|format((r.cur_price or r.bond_price)|float) }}</td>
+            <td class="num" data-sort="{{ '%.4f'|format(r.premium_rate|float) if r.premium_rate is not none else 0 }}">{% if r.premium_rate is not none %}{{ '%.2f'|format(r.premium_rate|float) }}%{% else %}-{% endif %}</td>
+            <td class="num" data-sort="{{ '%.4f'|format(r.years_left|float) if r.years_left is not none else 0 }}">{% if r.years_left is not none %}{{ '%.2f'|format(r.years_left|float) }}{% else %}-{% endif %}</td>
+            <td data-sort="{{ r.entry_week or '' }}">{% if r.entry_week %}{{ r.entry_week[5:] }}{% else %}-{% endif %}</td>
+            <td class="num" data-sort="{{ '%.4f'|format(r.entry_price|float) if r.entry_price else 0 }}">{% if r.entry_price %}{{ '%.2f'|format(r.entry_price|float) }}{% else %}-{% endif %}</td>
+            <td class="num {% if r.hold_return is not none %}{% if r.hold_return >= 0 %}up{% else %}down{% endif %}{% endif %}" data-sort="{{ '%.4f'|format(r.hold_return|float) if r.hold_return is not none else 0 }}">{% if r.hold_return is not none %}{{ '%+.2f'|format(r.hold_return) }}%{% else %}-{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endfor %}
+
+  <section class="panel">
+    <div class="panel-head"><h2>口径说明</h2></div>
+    <ul class="hint" style="line-height:1.9">
+      <li><strong>候选池</strong>：未退市、未到期、已上市、未停牌、未公告强赎，且最近 5 个交易日有真实成交价。三个策略共用，<strong>不排除 ST 与银行正股</strong>（横向对比需要同一池子；银行/ST 回避属于 /double-low 那套实盘策略的额外风控）。</li>
+      <li><strong>建仓与轮动</strong>：每周一计算一次名单，同一周重复运行会覆盖而非追加。调入价取调入周周一真实收盘价，现价取最新收盘价。</li>
+      <li><strong>收益</strong>：浮动盈亏 = (现价 − 调入价) / 调入价，等权每只 1 万元，组合收益率为各只算术平均。<strong>未实现</strong>，且已调出的债不在持仓表内统计，所以数字随持仓变化而变化，不是策略的完整累计净值。</li>
+      <li><strong>「到期收益率」列（仅低价债表）</strong>：为该策略的<strong>辅助指标，不参与排序</strong>——低价债仍按转债价格升序选取。算法为<strong>含各年票息的精确现金流贴现</strong>（<code>checkup.ytm_of_bond</code>），与 <a class="link" href="/bonds">全部转债</a>列表页同口径，票息取自东财；缺票息的债显示「-」。它的用途是区分「真便宜」与「被信用风险折价」：低价债最大的风险不是波动，而是便宜背后的烂基本面，<strong>收益率越高、越要回头确认是不是正股有雷</strong>。</li>
+      <li><strong>对比曲线</strong>：以首个建仓日为起点，逐日计算当前持仓的等权浮动收益率。曲线会随持仓调整而变化，越往后越有参考价值。</li>
+    </ul>
+  </section>
+
+</div>
+
+<script src="/static/js/chart.umd.min.js"></script>
+<script>
+  var CMP = {{ chart|tojson }};
+  (function(){
+    if(typeof Chart === 'undefined' || !document.getElementById('cmpChart')) return;
+    if(!CMP || !CMP.labels || !CMP.labels.length) return;
+    var datasets = (CMP.series || []).map(function(s){
+      return {
+        label: s.name,
+        data: s.data,
+        borderColor: s.color,
+        backgroundColor: 'transparent',
+        borderWidth: s.dash ? 1.5 : 2,
+        borderDash: s.dash ? [5,4] : [],
+        pointRadius: 0,
+        tension: 0.08,
+        spanGaps: true
+      };
+    });
+    new Chart(document.getElementById('cmpChart').getContext('2d'), {
+      type: 'line',
+      data: { labels: CMP.labels, datasets: datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          y: { title: { display: true, text: '收益率(%)' },
+               ticks: { callback: function(v){ return v + '%'; } },
+               grid: { color: 'rgba(0,0,0,.06)' } },
+          x: { ticks: { maxTicksLimit: 12 }, grid: { display: false } }
+        },
+        plugins: { legend: { position: 'top' } }
+      }
+    });
+  })();
+</script>
+</body>
+</html>

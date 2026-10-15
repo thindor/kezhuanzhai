@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>可转债策略回测 - {{ site_name }}</title>
+<meta name="description" content="可转债多因子轮动策略回测：可选双低值、转股溢价率、到期收益率、价格、剩余规模、剩余年限等因子，自定义持仓只数、轮动周期与起止日期，生成每期持仓明细、净值曲线与年化收益/最大回撤/夏普比率等指标。">
+<meta name="keywords" content="可转债回测,双低策略回测,转债轮动,多因子策略,转债溢价率,到期收益率,策略回测工具">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="{{ request.url_root }}backtest">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .bt-form { display:grid; grid-template-columns:repeat(auto-fill, minmax(168px, 1fr)); gap:12px 14px; margin-top:4px; }
+  .bt-field { display:flex; flex-direction:column; gap:5px; }
+  .bt-field label { font-size:12.5px; color:#6b7480; font-weight:600; }
+  .bt-field input, .bt-field select { height:36px; padding:0 10px; border:1px solid #e2e6ee; border-radius:9px;
+    font-size:13.5px; color:#1f2937; background:#fff; outline:none; width:100%; box-sizing:border-box; }
+  .bt-field input:focus, .bt-field select:focus { border-color:#4b8bf5; box-shadow:0 0 0 3px rgba(75,139,245,.12); }
+  .bt-checks { display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding-top:20px; }
+  .bt-checks label { font-size:13px; color:#374151; display:flex; align-items:center; gap:6px; cursor:pointer; }
+  .bt-actions { display:flex; gap:10px; align-items:center; margin-top:16px; flex-wrap:wrap; }
+  .bt-btn { height:40px; padding:0 26px; border:none; border-radius:10px; background:#2563eb; color:#fff;
+    font-size:14.5px; font-weight:700; cursor:pointer; box-shadow:0 2px 8px rgba(37,99,235,.22); }
+  .bt-btn:hover { background:#1d4ed8; }
+  .bt-btn.ghost { background:#f2f4f8; color:#4b5563; box-shadow:none; }
+  .bt-btn.ghost:hover { background:#e8ebf1; }
+
+  .kpi-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:12px; margin-top:6px; }
+  .kpi { background:#fff; border:1px solid #eef0f4; border-radius:12px; padding:13px 15px; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+  .kpi .k-label { font-size:12.5px; color:#8a93a3; }
+  .kpi .k-val { font-size:21px; font-weight:800; margin-top:5px; letter-spacing:-.4px; font-variant-numeric:tabular-nums; }
+  .kpi .k-sub { font-size:11.5px; color:#9aa3b2; margin-top:3px; }
+  .kpi.hl { background:linear-gradient(135deg,#f3f8ff,#eaf2ff); border-color:#d5e5ff; }
+
+  .f-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:10px 18px; }
+  .f-item { font-size:13px; color:#4b5563; display:flex; gap:8px; align-items:baseline; }
+  .f-item .fk { color:#98a1b0; min-width:96px; flex-shrink:0; }
+  .f-item .fv { font-weight:700; color:#1f2937; }
+
+  table.bt-tbl { width:100%; border-collapse:collapse; font-size:13px; }
+  table.bt-tbl th, table.bt-tbl td { padding:9px 10px; border-bottom:1px solid #f1f3f7; text-align:right; white-space:nowrap; }
+  table.bt-tbl th { font-size:12px; color:#8a93a3; font-weight:700; background:#fafbfd; position:sticky; top:0; z-index:2; }
+  table.bt-tbl th:nth-child(1), table.bt-tbl td:nth-child(1),
+  table.bt-tbl th:nth-child(2), table.bt-tbl td:nth-child(2) { text-align:left; }
+  table.bt-tbl tbody tr.prow { cursor:pointer; }
+  table.bt-tbl tbody tr.prow:hover { background:#f7f9fd; }
+  table.bt-tbl tbody tr.prow.open { background:#eff5ff; }
+  .caret { display:inline-block; width:12px; color:#9aa3b2; transition:transform .15s; }
+  tr.prow.open .caret { transform:rotate(90deg); }
+  .dtl-row > td { padding:0 !important; background:#fbfcfe; border-bottom:1px solid #eef1f6; }
+  .dtl-inner { padding:10px 14px 14px; }
+  table.dtl-tbl { width:100%; border-collapse:collapse; font-size:12.5px; }
+  table.dtl-tbl th, table.dtl-tbl td { padding:6px 9px; text-align:right; border-bottom:1px solid #f1f3f7; white-space:nowrap; }
+  table.dtl-tbl th { color:#8a93a3; font-weight:700; background:#f6f8fc; }
+  table.dtl-tbl th:nth-child(1), table.dtl-tbl td:nth-child(1),
+  table.dtl-tbl th:nth-child(2), table.dtl-tbl td:nth-child(2) { text-align:left; }
+  .up { color:#d4263a; }
+  .down { color:#1a9c54; }
+  .kept { color:#8a93a3; font-size:11.5px; }
+  .tbl-scroll { max-height:640px; overflow:auto; border:1px solid #eef0f4; border-radius:12px; }
+  .warn-box { background:#fffbf0; border:1px solid #ffe6b8; border-radius:12px; padding:12px 16px; }
+  .warn-box li { font-size:12.8px; color:#8a6d1f; line-height:1.85; }
+</style>
+</head>
+<body>
+{% include '_nav.html' %}
+<div class="container">
+
+  <nav class="breadcrumb" aria-label="breadcrumb">
+    <a href="/">
+      <svg class="home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      首页
+    </a>
+    <span class="current">策略回测</span>
+  </nav>
+
+  <!-- ============ 参数区 ============ -->
+  <section class="panel">
+    <div class="panel-head">
+      <h1>可转债策略回测</h1>
+      <span class="hint">选因子 → 设轮动规则 → 看各期数据与收益曲线</span>
+    </div>
+
+    <form method="get" action="/backtest">
+      <div class="bt-form">
+        <div class="bt-field">
+          <label>排序因子</label>
+          <select name="factor">
+            {% for k, v in factors.items() %}
+            <option value="{{ k }}" {{ 'selected' if form.factor == k }}>{{ v.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="bt-field">
+          <label>排序方向</label>
+          <select name="order">
+            <option value="" {{ 'selected' if not form.order }}>默认（因子自带）</option>
+            <option value="asc" {{ 'selected' if form.order == 'asc' }}>升序（取最小）</option>
+            <option value="desc" {{ 'selected' if form.order == 'desc' }}>降序（取最大）</option>
+          </select>
+        </div>
+        <div class="bt-field">
+          <label>每期持仓只数</label>
+          <input type="number" name="topn" min="1" max="100" value="{{ form.topn }}">
+        </div>
+        <div class="bt-field">
+          <label>缓冲区（跌出前N名才卖）</label>
+          <input type="number" name="sell_topn" min="1" max="200" placeholder="留空=与持仓数相同" value="{{ form.sell_topn }}">
+        </div>
+        <div class="bt-field">
+          <label>轮动周期（交易日）</label>
+          <select name="rebalance">
+            {% for d, lbl in [(5,'每周（5）'),(10,'双周（10）'),(20,'每月（20）'),(40,'两月（40）'),(60,'每季（60）'),(1,'每日（1）')] %}
+            <option value="{{ d }}" {{ 'selected' if form.rebalance|string == d|string }}>{{ lbl }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="bt-field">
+          <label>回测起始日</label>
+          <input type="date" name="start" value="{{ form.start }}">
+        </div>
+        <div class="bt-field">
+          <label>回测结束日</label>
+          <input type="date" name="end" value="{{ form.end }}">
+        </div>
+        <div class="bt-field">
+          <label>单边手续费（%）</label>
+          <input type="number" name="fee" step="0.01" min="0" max="2" value="{{ form.fee }}">
+        </div>
+        <div class="bt-field">
+          <label>价格下限（元）</label>
+          <input type="number" name="min_price" step="1" placeholder="不限" value="{{ form.min_price }}">
+        </div>
+        <div class="bt-field">
+          <label>价格上限（元）</label>
+          <input type="number" name="max_price" step="1" placeholder="不限" value="{{ form.max_price }}">
+        </div>
+        <div class="bt-field">
+          <label>最低评级</label>
+          <select name="min_rating">
+            <option value="" {{ 'selected' if not form.min_rating }}>不限</option>
+            {% for r in ['AAA','AA+','AA','AA-','A+'] %}
+            <option value="{{ r }}" {{ 'selected' if form.min_rating == r }}>≥ {{ r }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="bt-field">
+          <label>剩余规模下限（亿）</label>
+          <input type="number" name="min_scale" step="0.5" placeholder="不限" value="{{ form.min_scale }}">
+        </div>
+        <div class="bt-field">
+          <label>剩余规模上限（亿）</label>
+          <input type="number" name="max_scale" step="0.5" placeholder="不限" value="{{ form.max_scale }}">
+        </div>
+        <div class="bt-field">
+          <label>剩余年限下限（年）</label>
+          <input type="number" name="min_years" step="0.5" placeholder="不限" value="{{ form.min_years }}">
+        </div>
+      </div>
+      <div class="bt-checks">
+        <label><input type="checkbox" name="exclude_st" value="1" {{ 'checked' if form.exclude_st == '1' }}> 排除正股 ST</label>
+        <label><input type="checkbox" name="exclude_bank" value="1" {{ 'checked' if form.exclude_bank == '1' }}> 排除正股银行</label>
+      </div>
+      <div class="bt-actions">
+        <button type="submit" class="bt-btn">开始回测</button>
+        <a class="bt-btn ghost" href="/backtest?factor=double_low&topn=20&rebalance=5&start=2024-01-01&end=&fee=0.02&exclude_st=1&exclude_bank=1">恢复默认参数</a>
+        <span class="hint">默认区间 {{ default_start }} 起（转债价有效数据自 2020-09 起，2024 年后每日 200+ 只债）</span>
+      </div>
+    </form>
+  </section>
+
+  {% if result and not result.ok %}
+  <section class="panel">
+    <div class="warn-box"><b>无法回测：</b>{{ result.error }}</div>
+  </section>
+  {% endif %}
+
+  {% if result and result.ok %}
+  {% set m = result.metrics %}
+
+  <!-- ============ 指标卡 ============ -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>回测结果</h2>
+      <span class="hint">{{ result.params.start }} ~ {{ result.params.end }} ·
+        {{ result.params.factor_label }} · {{ result.params.order_label }} ·
+        持仓 {{ result.params.topn }} 只 · {{ result.params.rebalance }} 交易日轮动 ·
+        共 {{ m.periods }} 期</span>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi hl">
+        <div class="k-label">累计收益</div>
+        <div class="k-val {% if m.total_return >= 0 %}up{% else %}down{% endif %}">{{ '%+.2f'|format(m.total_return) }}%</div>
+        <div class="k-sub">期末净值 {{ m.final_nav }}</div>
+      </div>
+      <div class="kpi">
+        <div class="k-label">年化收益</div>
+        <div class="k-val {% if m.annual_return >= 0 %}up{% else %}down{% endif %}">{{ '%+.2f'|format(m.annual_return) }}%</div>
+        <div class="k-sub">区间 {{ m.span_days }} 天</div>
+      </div>
+      <div class="kpi hl">
+        <div class="k-label">超额收益（对比基准）</div>
+        <div class="k-val {% if m.bench_return is not none and m.total_return - m.bench_return >= 0 %}up{% else %}down{% endif %}">
+          {% if m.bench_return is not none %}{{ '%+.2f'|format(m.total_return - m.bench_return) }}%{% else %}-{% endif %}
+        </div>
+        <div class="k-sub">基准 {% if m.bench_return is not none %}{{ '%+.2f'|format(m.bench_return) }}%{% else %}-{% endif %}</div>
+      </div>
+      <div class="kpi">
+        <div class="k-label">最大回撤</div>
+        <div class="k-val down">{{ '%.2f'|format(m.max_drawdown) }}%</div>
+        <div class="k-sub">净值峰值回落</div>
+      </div>
+      <div class="kpi">
+        <div class="k-label">期胜率</div>
+        <div class="k-val">{{ m.win_rate }}%</div>
+        <div class="k-sub">平均每期 {{ '%+.2f'|format(m.avg_period_ret) }}%</div>
+      </div>
+      <div class="kpi">
+        <div class="k-label">年化波动率</div>
+        <div class="k-val">{{ m.volatility }}%</div>
+        <div class="k-sub">按周期折算</div>
+      </div>
+      <div class="kpi">
+        <div class="k-label">夏普比率</div>
+        <div class="k-val">{{ m.sharpe if m.sharpe is not none else '-' }}</div>
+        <div class="k-sub">无风险 2%</div>
+      </div>
+      <div class="kpi">
+        <div class="k-label">回测期数</div>
+        <div class="k-val">{{ m.periods }}</div>
+        <div class="k-sub">覆盖 {{ result.coverage.bonds }} 只债</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 收益曲线 ============ -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>净值走势</h2>
+      <span class="hint">红色＝策略，灰色虚线＝可转债等权指数（同期同起点归一）</span>
+    </div>
+    <div class="chart-wrap"><canvas id="btChart" height="340"></canvas></div>
+  </section>
+
+  <!-- ============ 参数与过滤回显 ============ -->
+  <section class="panel">
+    <div class="panel-head"><h2>本次回测口径</h2></div>
+    <div class="f-grid">
+      <div class="f-item"><span class="fk">排序因子</span><span class="fv">{{ result.params.factor_label }}</span></div>
+      <div class="f-item"><span class="fk">排序方向</span><span class="fv">{{ result.params.order_label }}</span></div>
+      <div class="f-item"><span class="fk">持仓只数</span><span class="fv">{{ result.params.topn }} 只（等权）</span></div>
+      <div class="f-item"><span class="fk">缓冲区卖出</span><span class="fv">跌出前 {{ result.params.sell_topn }} 名才卖</span></div>
+      <div class="f-item"><span class="fk">轮动周期</span><span class="fv">每 {{ result.params.rebalance }} 个交易日</span></div>
+      <div class="f-item"><span class="fk">起止日期</span><span class="fv">{{ result.params.start }} ~ {{ result.params.end }}</span></div>
+      <div class="f-item"><span class="fk">单边手续费</span><span class="fv">{{ result.params.fee }}%（按换手率扣除）</span></div>
+      <div class="f-item" style="grid-column:1/-1"><span class="fk">候选池过滤</span><span class="fv">{{ result.params.filters }}</span></div>
+    </div>
+  </section>
+
+  <!-- ============ 各期数据 ============ -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>各期数据</h2>
+      <span class="hint">点击任意一期展开该期持仓明细（含每只债的因子值、买入价、卖出价、期间收益）</span>
+    </div>
+    <div class="tbl-scroll">
+      <table class="bt-tbl">
+        <thead>
+          <tr>
+            <th style="width:104px">调仓日</th>
+            <th style="width:104px">下期调仓</th>
+            <th>候选池(只)</th>
+            <th>持仓(只)</th>
+            <th>本期收益</th>
+            <th>其中费用</th>
+            <th>累计净值</th>
+            <th>累计收益</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in result.periods %}
+          <tr class="prow" data-idx="{{ loop.index0 }}">
+            <td><span class="caret">▶</span> {{ p.date }}</td>
+            <td>{{ p.next_date or '持有中' }}</td>
+            <td>{{ p.candidates }}</td>
+            <td>{{ p.n }}</td>
+            <td class="{% if p.ret >= 0 %}up{% else %}down{% endif %}"><b>{{ '%+.2f'|format(p.ret) }}%</b></td>
+            <td class="hint">{{ '%.3f'|format(p.cost) }}%</td>
+            <td>{{ p.nav }}</td>
+            <td class="{% if p.nav >= 1 %}up{% else %}down{% endif %}">{{ '%+.2f'|format((p.nav - 1) * 100) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 局限说明 ============ -->
+  <section class="panel">
+    <div class="panel-head"><h2>口径与局限（务必先读）</h2></div>
+    <div class="warn-box" style="margin-bottom:12px">
+      <ul style="margin:0;padding-left:20px">
+        {% for w in result.warnings %}
+        <li>{{ w }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <ul class="hint" style="line-height:1.95">
+      <li><strong>成交流程</strong>：每个调仓日以<strong>当日收盘价</strong>等权买入因子排名前 {{ result.params.topn }} 只，持有到下一个调仓日收盘卖出；最后一期未平仓，按区间最后交易日收盘价估值。</li>
+      <li><strong>因子口径</strong>：转股溢价率 =（转债价 ÷ 转股价值 − 1）×100，转股价值 = 100 ÷ 当期转股价 × 正股收盘价；<strong>当期转股价按历史下修记录还原</strong>（取该日之前最近一次生效的下修价）。双低值 = 转债价 + 溢价率。</li>
+      <li><strong>到期收益率</strong>为简化口径（赎回价与现价之差年化，不含中间票息现金流）。</li>
+      <li><strong>缓冲区</strong>：已持仓的债只要还在前 {{ result.params.sell_topn }} 名内就不卖，新债从排名靠前者依次补足到 {{ result.params.topn }} 只 —— 可显著降低换手与冲击成本。</li>
+      <li><strong>停牌与退市</strong>：持仓中若某债当日无成交价，按<strong>最后一个有效收盘价</strong>估值（近似退市结算），不做特殊赎回价处理。</li>
+      <li><strong>样本覆盖</strong>：{{ result.coverage.price_from }} ~ {{ result.coverage.price_to }}，共 {{ result.coverage.bonds }} 只转债有价格记录。</li>
+    </ul>
+  </section>
+  {% endif %}
+
+</div>
+
+{% if result and result.ok %}
+<script src="/static/js/chart.umd.min.js"></script>
+<script>
+var BT = {{ bt_json }};
+(function(){
+  // ---------- 净值曲线 ----------
+  if (typeof Chart !== 'undefined' && document.getElementById('btChart')) {
+    var toTs = function(s){ var p = s.split('-'); return Date.UTC(+p[0], +p[1]-1, +p[2]); };
+    var ds = [{
+      label: '策略净值',
+      data: BT.chart.dates.map(function(d, i){ return {x: toTs(d), y: +(((BT.chart.nav[i] - 1) * 100).toFixed(2))}; }),
+      borderColor: '#d4263a', backgroundColor: 'transparent', borderWidth: 2,
+      pointRadius: 0, tension: 0.1, spanGaps: true
+    }];
+    if (BT.chart.bench_dates && BT.chart.bench_dates.length) {
+      ds.push({
+        label: '等权指数（基准）',
+        data: BT.chart.bench_dates.map(function(d, i){ return {x: toTs(d), y: +(((BT.chart.bench[i] - 1) * 100).toFixed(2))}; }),
+        borderColor: '#9aa3b2', backgroundColor: 'transparent', borderWidth: 1.5,
+        borderDash: [5, 4], pointRadius: 0, tension: 0.1, spanGaps: true
+      });
+    }
+    new Chart(document.getElementById('btChart').getContext('2d'), {
+      type: 'line',
+      data: { datasets: ds },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+        scales: {
+          x: { type: 'linear',
+               ticks: { maxTicksLimit: 10, callback: function(v){
+                 var d = new Date(v);
+                 return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2);
+               } },
+               grid: { display: false } },
+          y: { title: { display: true, text: '累计收益率(%)' },
+               ticks: { callback: function(v){ return v + '%'; } },
+               grid: { color: 'rgba(0,0,0,.06)' } }
+        },
+        plugins: {
+          legend: { position: 'top', labels: { boxWidth: 14, font: { size: 12 } } },
+          tooltip: { callbacks: { title: function(items){
+            if (!items.length) return '';
+            var d = new Date(items[0].parsed.x);
+            return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2);
+          }, label: function(c){ return c.dataset.label + '：' + c.parsed.y + '%'; } } }
+        }
+      }
+    });
+  }
+
+  // ---------- 各期明细展开 ----------
+  var rows = document.querySelectorAll('tr.prow');
+  var fLabel = (BT.params && BT.params.factor_label) ? BT.params.factor_label : '因子值';
+  var dtHead = function(holding){
+    return '<thead><tr>'
+      + '<th>代码</th><th>名称</th><th>排名</th><th>' + fLabel + '</th><th>溢价率</th>'
+      + '<th>买入价</th><th>' + (holding ? '最新价' : '卖出价') + '</th><th>期间收益</th><th>状态</th>'
+      + '</tr></thead>';
+  };
+
+  // 生成明细行 HTML
+  var rowsHtml = function(h, holding){
+    var out = '';
+    for (var i = 0; i < h.length; i++) {
+      var r = h[i];
+      var cls = r[7] >= 0 ? 'up' : 'down';
+      out += '<tr>'
+        + '<td><a class="link" href="/?code=' + r[0] + '">' + r[0] + '</a></td>'
+        + '<td>' + (r[1] || '') + '</td>'
+        + '<td>' + r[2] + '</td>'
+        + '<td>' + (r[3] === null ? '-' : r[3]) + '</td>'
+        + '<td>' + (r[4] === null ? '-' : r[4] + '%') + '</td>'
+        + '<td>' + r[5] + '</td>'
+        + '<td>' + r[6] + '</td>'
+        + '<td class="' + cls + '"><b>' + (r[7] >= 0 ? '+' : '') + r[7] + '%</b></td>'
+        + '<td>' + (r[8] ? '<span class="kept">继续持有</span>' : '新买入') + '</td>'
+        + '</tr>';
+    }
+    return out;
+  };
+
+  var buildDetail = function(idx){
+    var d = BT.periods[idx];
+    var wrap = document.createElement('div');
+    wrap.className = 'dtl-inner';
+    var tbl = document.createElement('table');
+    tbl.className = 'dtl-tbl';
+    // 先构造 table 元素再赋值 innerHTML，避免游离 td 内解析 table 的怪癖
+    tbl.innerHTML = dtHead(d.holding) + '<tbody>' + rowsHtml(d.h, d.holding) + '</tbody>';
+    wrap.appendChild(tbl);
+    var td = document.createElement('td');
+    td.colSpan = 8;
+    td.appendChild(wrap);
+    var tr = document.createElement('tr');
+    tr.className = 'dtl-row';
+    tr.appendChild(td);
+    return tr;
+  };
+
+  for (var i = 0; i < rows.length; i++) {
+    rows[i].addEventListener('click', function(){
+      var next = this.nextElementSibling;
+      if (next && next.classList.contains('dtl-row')) {
+        next.parentNode.removeChild(next);
+        this.classList.remove('open');
+        return;
+      }
+      var tr = buildDetail(+this.getAttribute('data-idx'));
+      this.parentNode.insertBefore(tr, this.nextSibling);
+      this.classList.add('open');
+    });
+  }
+})();
+</script>
+{% endif %}
+</body>
+</html>

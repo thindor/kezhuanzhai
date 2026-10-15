@@ -12,6 +12,8 @@
     <a href="/redemption-warnings" class="{{ 'active' if request.path.startswith('/redemption-warnings') }}">强赎预警</a>
     <a href="/down-revise-warnings" class="{{ 'active' if request.path.startswith('/down-revise-warnings') }}">下修提醒</a>
     <a href="/double-low" class="{{ 'active' if request.path.startswith('/double-low') }}">双低策略</a>
+    <a href="/strategies" class="{{ 'active' if request.path.startswith('/strategies') }}">多策略</a>
+    <a href="/backtest" class="{{ 'active' if request.path.startswith('/backtest') }}">策略回测</a>
     <a href="/new-bonds" class="{{ 'active' if request.path.startswith('/new-bonds') }}">新发转债</a>
     <a href="/xiaopanzhai" class="{{ 'active' if request.path.startswith('/xiaopanzhai') }}">小盘债</a>
     {% if admin %}<a href="/watchlist" class="{{ 'active' if request.path.startswith('/watchlist') }}">我的关注</a>{% endif %}

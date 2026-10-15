@@ -18,6 +18,8 @@
 import time
 import threading
 import re
+import json
+import math
 import requests
 from datetime import datetime, date
 
@@ -179,27 +181,36 @@ def years_left(expire_str):
 
 def compute_ytm(price, coupon_rates, redeem_price, yleft):
     """到期收益率(%)：已知现价/各年票息(百分比即元)/赎回价/剩余年限，二分法求解。
-    票息按年付息近似（未对齐已过的付息期，量级准确，用于体检卡参考）。"""
+
+    现金流口径（2026-10 修正，自算 YTM 的统一实现）：
+      - 剩余付息次数 n = ceil(剩余年限)；票息取**最近 n 年**——已过年份的票息已付讫，
+        旧版取最早 n 年（cf[:k]），而票息逐年递增，会系统性低估到期回报；
+      - 第 1..n-1 期按整年贴现，最后一期（末年票息 + 到期赎回价）按**真实剩余年限**
+        yleft 贴现 → 剩 0.2 年的临期债也是年化口径，不再被「不足一年当一年」拉平
+        （临期债是「下修促转股 / 临期收敛」研究的核心区间，这里必须准）。
+    仍是近似：未逐笔对齐真实付息日与已过的付息期。价格高到任何收益率都解释不了时取
+    下界 -99%。"""
     if price is None or not coupon_rates or redeem_price is None or yleft is None or yleft <= 0:
         return None
-    k = max(1, int(round(yleft)))
+    n = max(1, int(math.ceil(round(yleft, 6))))
     cf = list(coupon_rates)
-    if len(cf) > k:
-        cf = cf[:k]
-    elif len(cf) < k:
-        cf = cf + [cf[-1]] * (k - len(cf))
+    if len(cf) >= n:
+        cf = cf[-n:]
+    else:
+        cf = [cf[0]] * (n - len(cf)) + cf
+    t_end = yleft
 
     def pv(y):
         s = 0.0
-        for i in range(k - 1):
+        for i in range(n - 1):
             s += cf[i] / (1 + y) ** (i + 1)
-        s += (cf[-1] + redeem_price) / (1 + y) ** k
+        s += (cf[-1] + redeem_price) / (1 + y) ** t_end
         return s
 
-    lo, hi = -0.5, 0.5
-    if pv(lo) < price:  # 极高收益（价格极低），直接返回下界
+    lo, hi = -0.9999, 2.0
+    if pv(lo) < price:  # 价格高到任何收益率都解释不了（多见于临期高价债），取下界
         return lo * 100
-    for _ in range(100):
+    for _ in range(200):
         mid = (lo + hi) / 2
         if pv(mid) > price:
             lo = mid
@@ -208,20 +219,53 @@ def compute_ytm(price, coupon_rates, redeem_price, yleft):
     return (lo + hi) / 2 * 100
 
 
-def compute_pure_value(coupon_rates, redeem_price, yleft, disc):
-    """纯债价值(债底)估算：各期票息+赎回价按评级近似信用收益率贴现。"""
-    if not coupon_rates or redeem_price is None or yleft is None:
+def ytm_of_bond(bond, price=None):
+    """**全站统一口径**的「到期收益率(%)」：按 bonds 表一行数据算精确 YTM。
+
+    需要 bond 提供 coupon_json(各年票息 JSON) / redeem_price / expire_date；
+    price 缺省取 bond['current_price']。缺票息、缺赎回价、已到期均返回 None。
+    列表页 / 策略页 / 体检卡一律走这里，避免各页各算一套口径。
+    """
+    if not bond:
         return None
-    k = max(1, int(round(yleft)))
+    cr = bond.get("coupon_rates")
+    if not cr:
+        raw = bond.get("coupon_json")
+        if raw:
+            try:
+                cr = json.loads(raw) if isinstance(raw, str) else list(raw)
+            except (ValueError, TypeError):
+                cr = None
+    try:
+        rp = float(bond["redeem_price"]) if bond.get("redeem_price") is not None else None
+    except (ValueError, TypeError, KeyError):
+        rp = None
+    px = price if price is not None else bond.get("current_price")
+    try:
+        px = float(px) if px is not None else None
+    except (ValueError, TypeError):
+        px = None
+    y = compute_ytm(px, cr, rp, years_left(bond.get("expire_date")))
+    return round(y, 2) if y is not None else None
+
+
+def compute_pure_value(coupon_rates, redeem_price, yleft, disc):
+    """纯债价值(债底)估算：各期票息+赎回价按评级近似信用收益率贴现。
+
+    现金流口径与 compute_ytm 完全一致（票息取最近 n 年、末期按真实剩余年限贴现），
+    保证「债底」与「YTM」是同一套假设下的两面，不会互相打架。"""
+    if not coupon_rates or redeem_price is None or yleft is None or yleft <= 0:
+        return None
+    n = max(1, int(math.ceil(round(yleft, 6))))
     cf = list(coupon_rates)
-    if len(cf) > k:
-        cf = cf[:k]
-    elif len(cf) < k:
-        cf = cf + [cf[-1]] * (k - len(cf))
+    if len(cf) >= n:
+        cf = cf[-n:]
+    else:
+        cf = [cf[0]] * (n - len(cf)) + cf
     s = 0.0
-    for i in range(k - 1):
+    for i in range(n - 1):
         s += cf[i] / (1 + disc) ** (i + 1)
-    s += (cf[-1] + redeem_price) / (1 + disc) ** k
+    s += (cf[-1] + redeem_price) / (1 + disc) ** yleft
     return s
 
 
@@ -371,12 +415,13 @@ def refresh_remaining_scales():
 
 
 def refresh_redeem_prices():
-    """东财全量基础(RPT_BOND_CB_LIST)解析的到期赎回价(元) -> bonds.redeem_price。
+    """东财全量基础(RPT_BOND_CB_LIST)解析的到期赎回价(元) 与各年票息 -> bonds。
 
     复用 fetch_em_cb_basics（一次双排序拉全市场，内存缓存 10min），逐只写入
-    bonds.redeem_price（仅写 >0）。覆盖约 1000 只；剩余中段(123023~123072)约 50 只
-    需按需单只补取，未覆盖则不写（保持 NULL，列表页回退 '-'）。返回写入条数；
-    异常时静默返回 0。"""
+    bonds.redeem_price（仅写 >0）；**同时把各年票息写入 bonds.coupon_json**——
+    此前票息只活在内存缓存里，导致列表页/策略页无法离线按精确口径算 YTM。
+    覆盖约 1000 只；剩余中段(123023~123072)约 50 只需按需单只补取，未覆盖则不写
+    （保持 NULL，页面回退 '-'）。返回写入条数；异常时静默返回 0。"""
     try:
         em = fetch_em_cb_basics(force=True)
     except Exception:
@@ -387,10 +432,20 @@ def refresh_redeem_prices():
     cur = conn.cursor()
     n = 0
     for bid, c in em.items():
+        sets, vals = [], []
         rp = c.get("redeem_price")
         if rp is not None and rp > 0:
-            cur.execute("UPDATE bonds SET redeem_price=? WHERE bond_code=?", (rp, bid))
-            n += 1
+            sets.append("redeem_price=?")
+            vals.append(rp)
+        cr = c.get("coupon_rates")
+        if cr:
+            sets.append("coupon_json=?")
+            vals.append(json.dumps(cr))
+        if not sets:
+            continue
+        cur.execute("UPDATE bonds SET " + ", ".join(sets) + " WHERE bond_code=?",
+                    vals + [bid])
+        n += 1
     conn.commit()
     conn.close()
     return n

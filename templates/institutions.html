@@ -24,18 +24,25 @@
 
   <div class="page-head">
     <h2>🏦 可转债机构持有人榜单</h2>
-    <p class="sub">共 <strong>{{ total }}</strong> 家机构持有人（基金 / 一般机构）· 按持仓估算市值降序</p>
+    <p class="sub">共 <strong>{{ total }}</strong> 家机构持有人 · <b>统一最新期 {{ holder_period }}</b> · 按{{ {'mv':'持仓市值','bonds':'持有转债数','records':'出现次数'}[sort] }}{{ '降序' if order == 'desc' else '升序' }}</p>
+    <p class="sub" style="font-size:12px">口径：<b>只统计统一最新期（{{ holder_period }}）上榜、且持仓未退市的机构</b>——所有人的持仓取自同一期，横向可比。市值 = 持有量(万张) × 现价(元/张)，现价缺失按面值 100 元/张。</p>
   </div>
 
   {% if persons %}
+  <p class="sort-tip">点击表头可排序：持仓市值 / 持有转债数量 / 出现次数（再次点击切换升/降序）</p>
+  {% macro sortth(col, label, default_order, cls='') %}
+    {% set cur = (sort == col) %}
+    {% set tgt = ('asc' if cur and order == 'desc' else ('desc' if cur and order == 'asc' else default_order)) %}
+    <th class="{{ cls }}"><a class="sort-h" href="?sort={{ col }}&amp;order={{ tgt }}&amp;page=1">{{ label }}{% if cur %}<span class="sort-ar">{{ '▼' if order == 'desc' else '▲' }}</span>{% endif %}</a></th>
+  {% endmacro %}
   <table class="rank">
     <thead>
       <tr>
         <th style="width:52px">#</th>
         <th>机构持有人</th>
-        <th>持仓市值(估算)</th>
-        <th>持有转债</th>
-        <th>出现次数</th>
+        {{ sortth('mv', '持仓市值(估算)', 'desc') }}
+        {{ sortth('bonds', '持有转债', 'desc') }}
+        {{ sortth('records', '出现次数', 'desc') }}
         <th>代表持仓</th>
       </tr>
     </thead>
@@ -58,9 +65,9 @@
 
   {% if total_pages > 1 %}
   <div class="pager">
-    {% if page > 1 %}<a class="pg" href="/institutions?page={{ page-1 }}">← 上一页</a>{% endif %}
+    {% if page > 1 %}<a class="pg" href="/institutions?page={{ page-1 }}&amp;sort={{ sort }}&amp;order={{ order }}">← 上一页</a>{% endif %}
     <span class="pg-cur">第 {{ page }} / {{ total_pages }} 页</span>
-    {% if page < total_pages %}<a class="pg" href="/institutions?page={{ page+1 }}">下一页 →</a>{% endif %}
+    {% if page < total_pages %}<a class="pg" href="/institutions?page={{ page+1 }}&amp;sort={{ sort }}&amp;order={{ order }}">下一页 →</a>{% endif %}
   </div>
   {% endif %}
 </div>

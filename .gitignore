@@ -50,3 +50,9 @@ holder_refresh_status.json
 
 # ---- 集思录 Cookie 抓取状态文件（运行时产生，非源码）----
 jsl_cookie_status.json
+
+# ---- WorkBuddy 工具数据（记忆 / 自动化配置，非项目源码）----
+.workbuddy/
+
+# ---- 一次性分析报告（本地留存，非源码）----
+可转债*.html

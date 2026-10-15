@@ -285,7 +285,7 @@
 <section class="rank-panel">
   <div class="rank-head">
     <h2>🐂 可转债牛散榜</h2>
-    <span class="hint">同一只转债跨多期不重复累加，仅按最新报告期持仓 × 现价估算（现价缺失按面值 100 计）· Top {{ ranking|length }}</span>
+    <span class="hint">口径：<b>只看统一最新期（{{ holder_period }}）上榜的牛散</b>，所有人的持仓取自同一期、可直接横向比较；早年已清仓或最近一期未再上榜的不计入 · 市值 = 持有量 × 现价（现价缺失按面值 100 计）· Top {{ ranking|length }}</span>
   </div>
   {% if ranking %}
   <div class="table-scroll"><table class="rank">
@@ -314,7 +314,7 @@
 <section class="rank-panel">
   <div class="rank-head">
     <h2>🏦 可转债机构榜</h2>
-    <span class="hint">机构(基金 / 一般机构)按持仓市值估算降序 · Top {{ inst_ranking|length }}</span>
+    <span class="hint">口径：<b>只看统一最新期（{{ holder_period }}）上榜的机构</b>，持仓取自同一期 · 按持仓市值估算降序 · Top {{ inst_ranking|length }}</span>
   </div>
   {% if inst_ranking %}
   <div class="table-scroll"><table class="rank">

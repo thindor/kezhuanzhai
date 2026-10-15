@@ -30,6 +30,7 @@ def init_db():
         current_price        REAL,
         remaining_scale      REAL,
         redeem_price         REAL,
+        coupon_json          TEXT,
         data_source          TEXT,
         created_at           TEXT,
         updated_at           TEXT
@@ -51,6 +52,9 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_holders_bond ON holders(bond_code)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_holders_period ON holders(bond_code, report_period)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_holders_natural ON holders(is_natural)")
+    # holder_name 是详情页 (WHERE holder_name=?) 与各榜单聚合 (GROUP BY holder_name) 的
+    # 主查询键；之前只按 bond_code 建过索引，导致这两类查询全表扫 4 万行。
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_holders_name_period ON holders(holder_name, report_period)")
     # 兼容旧库：holders 表缺 is_natural 列时补列，并回填存量自然人标记
     cur.execute("PRAGMA table_info(holders)")
     cols = [r[1] for r in cur.fetchall()]
@@ -75,7 +79,7 @@ def init_db():
     # 兼容旧库：退市标记字段（is_delisted / delist_date）
     cur.execute("PRAGMA table_info(bonds)")
     bcols3 = [r[1] for r in cur.fetchall()]
-    for col, ctype in [("is_delisted", "INTEGER"), ("delist_date", "TEXT"), ("remaining_scale", "REAL"), ("redeem_price", "REAL")]:
+    for col, ctype in [("is_delisted", "INTEGER"), ("delist_date", "TEXT"), ("remaining_scale", "REAL"), ("redeem_price", "REAL"), ("coupon_json", "TEXT")]:
         if col not in bcols3:
             cur.execute("ALTER TABLE bonds ADD COLUMN %s %s" % (col, ctype))
     # 最近检索/浏览的转债（首页快捷入口）
@@ -132,6 +136,28 @@ def init_db():
         updated_at   TEXT
     )""")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_double_low_week ON double_low_log(week_start)")
+    # 回测按「交易日区间」批量取价，需按 trade_date 索引避免全表扫描
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_close_date ON daily_close(trade_date)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_close_code_date ON daily_close(bond_code, trade_date)")
+    # 多策略轮动快照（双低 / 小额债 / 低价债 共用同一张表，用 strategy_code 区分）
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS strategy_log (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        strategy_code TEXT NOT NULL,
+        week_start    TEXT NOT NULL,
+        rank          INTEGER,
+        bond_code     TEXT NOT NULL,
+        bond_name     TEXT,
+        stock_name    TEXT,
+        rating        TEXT,
+        bond_price    REAL,
+        metric_value  REAL,
+        premium_rate  REAL,
+        remaining_scale REAL,
+        years_left    REAL,
+        updated_at    TEXT
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_strategy_log ON strategy_log(strategy_code, week_start)")
     # 可转债等权指数（全样本价格等权，每日收盘后重算；基期取数据起点）
     cur.execute("""
     CREATE TABLE IF NOT EXISTS equal_weight_index (
@@ -757,101 +783,174 @@ def count_bonds():
     return n
 
 
-def get_all_natural_persons(limit=2000, offset=0):
-    """自然人聚合榜：按持仓估算市值（万元）降序排列，支持分页。
+# ---------------- 榜单口径：「统一最新期」 ----------------
+# 只认定期报告期（半年报 06-30 / 年报 12-31）。holders 表里还混有「新债上市公告书」
+# 日期（如 2026-08-25 只有 10 条 = 单只转债的十大持有人），不能拿来当榜单基准期。
+REGULAR_PERIOD_SUFFIXES = ("06-30", "12-31")
+# 新一期刚开始零星披露时（如 2026-12-31 只有几只债），覆盖转债数不足这个门槛就
+# 继续沿用上一期，避免榜单瞬间塌缩成几个人。
+MIN_PERIOD_COVERAGE = 50
 
-    市值口径（与 get_natural_ranking / 详情页一致）：每个（自然人, 转债）取最新报告期
-    持仓，市值 = 持有量(万张) × 现价(元/张)；现价缺失按面值 100 元/张 估算。
+
+def latest_report_period():
+    """榜单基准期（统一最新期）——所有持有人榜单只统计这一期上榜的人。
+
+    规则：在定期报告期（06-30 / 12-31）中取最新的一期；若该期覆盖的可转债数
+    少于 MIN_PERIOD_COVERAGE，则回退到上一期。当前返回 2026-06-30。
     """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        WITH latest AS (
-            SELECT h.*,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY h.holder_name, h.bond_code
-                       ORDER BY h.report_period DESC
-                   ) AS rn
+        SELECT report_period, COUNT(DISTINCT bond_code) AS bc
+        FROM holders
+        WHERE substr(report_period, 6) IN (?, ?)
+        GROUP BY report_period
+        ORDER BY report_period DESC
+    """, REGULAR_PERIOD_SUFFIXES)
+    rows = cur.fetchall()
+    conn.close()
+    for period, bc in rows:
+        if bc >= MIN_PERIOD_COVERAGE:
+            return period
+    return rows[0][0] if rows else None
+
+
+# 持有人榜单可排序字段白名单 —— 键为 URL 参数值，值为 SQL 别名。
+# 只允许这三个键，杜绝把用户输入直接拼进 ORDER BY（列名无法参数化）。
+HOLDER_SORT_KEYS = ("mv", "bonds", "records")
+_HOLDER_SORT_COLUMNS = {"mv": "mv_wan", "bonds": "bond_count", "records": "record_count"}
+
+
+def _holder_order_by(sort, order):
+    """把 (sort, order) 变成安全的 ORDER BY 片段。
+
+    主键按请求升降序，其余两个数值键固定降序作为「次排序」保证结果稳定，
+    最后追加姓名保证同值时顺序确定（分页不会漏项/重复）。
+    """
+    col = _HOLDER_SORT_COLUMNS.get(sort) or "mv_wan"
+    direction = "ASC" if str(order).lower() == "asc" else "DESC"
+    tie = [c for c in ("mv_wan", "bond_count", "record_count") if c != col]
+    return "%s %s, %s, t.holder_name" % (col, direction, ", ".join(c + " DESC" for c in tie))
+
+
+def get_all_natural_persons(limit=2000, offset=0, sort="mv", order="desc"):
+    """自然人聚合榜：支持分页，可按市值 / 持有转债数 / 出现次数排序。
+
+    口径：**只统计统一最新期（latest_report_period）上榜的自然人** —— 所有人的
+    持仓都取自同一期，横向可比；早年已清仓的老债、以及最近一期未再上榜的人都不计入。
+    市值 = 持有量(万张) × 现价(元/张)；现价缺失按面值 100 元/张 估算。
+    record_count 为该自然人在全库的历史出现总次数（反映活跃度）。
+
+    sort: "mv"(估算市值) | "bonds"(持有转债数) | "records"(历史出现次数)
+    order: "desc"(默认) | "asc"
+    """
+    period = latest_report_period()
+    if not period:
+        return []
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        WITH t AS (
+            SELECT h.holder_name, h.bond_code, h.hold_amount
             FROM holders h
-            WHERE h.is_natural = 1
+            WHERE h.is_natural = 1 AND h.report_period = ?
+        ),
+        hc AS (
+            SELECT holder_name, COUNT(*) AS hist_count
+            FROM holders WHERE is_natural = 1 GROUP BY holder_name
         )
-        SELECT l.holder_name,
-               COUNT(*)                        AS record_count,
-               COUNT(DISTINCT l.bond_code)     AS bond_count,
-               ROUND(SUM(l.hold_amount * COALESCE(b.current_price, 100.0)), 2) AS mv_wan
-        FROM latest l
-        LEFT JOIN bonds b ON l.bond_code = b.bond_code
-        WHERE l.rn = 1 AND COALESCE(b.is_delisted, 0) = 0
-        GROUP BY l.holder_name
-        ORDER BY mv_wan DESC, bond_count DESC, l.holder_name
+        SELECT t.holder_name,
+               hc.hist_count                   AS record_count,
+               COUNT(DISTINCT t.bond_code)     AS bond_count,
+               ROUND(SUM(t.hold_amount * COALESCE(b.current_price, 100.0)), 2) AS mv_wan
+        FROM t
+        JOIN hc ON hc.holder_name = t.holder_name
+        LEFT JOIN bonds b ON t.bond_code = b.bond_code
+        WHERE COALESCE(b.is_delisted, 0) = 0
+        GROUP BY t.holder_name
+        ORDER BY %s
         LIMIT ? OFFSET ?
-    """, (limit, offset))
+    """ % _holder_order_by(sort, order), (period, limit, offset))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
 
 
 def count_natural_persons():
+    """自然人持有人数（统一最新期上榜、且持仓未退市）。"""
+    period = latest_report_period()
+    if not period:
+        return 0
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        WITH latest AS (
-            SELECT h.*,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY h.holder_name, h.bond_code
-                       ORDER BY h.report_period DESC
-                   ) AS rn
-            FROM holders h
-            WHERE h.is_natural = 1
-        )
-        SELECT COUNT(DISTINCT l.holder_name)
-        FROM latest l
-        LEFT JOIN bonds b ON l.bond_code = b.bond_code
-        WHERE l.rn = 1 AND COALESCE(b.is_delisted, 0) = 0
-    """)
+        SELECT COUNT(DISTINCT h.holder_name)
+        FROM holders h
+        LEFT JOIN bonds b ON h.bond_code = b.bond_code
+        WHERE h.is_natural = 1 AND h.report_period = ?
+          AND COALESCE(b.is_delisted, 0) = 0
+    """, (period,))
     n = cur.fetchone()[0]
     conn.close()
     return n
 
 
-def get_all_institutions(limit=2000, offset=0):
-    """机构持有人聚合榜：按持仓估算市值（万元）降序排列，支持分页。
+def get_all_institutions(limit=2000, offset=0, sort="mv", order="desc"):
+    """机构持有人聚合榜：支持分页，可按市值 / 持有转债数 / 出现次数排序。
 
-    与 get_all_natural_persons 口径一致，仅筛选 is_natural = 0（机构/基金）。
+    与 get_all_natural_persons 口径一致，仅筛选 is_natural = 0（机构/基金）：
+    **只统计统一最新期上榜的机构**。
     市值 = 持有量(万张) × 现价(元/张)，现价缺失按面值 100 元/张 估算。
+
+    sort: "mv"(估算市值) | "bonds"(持有转债数) | "records"(历史出现次数)
+    order: "desc"(默认) | "asc"
     """
+    period = latest_report_period()
+    if not period:
+        return []
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        WITH latest AS (
-            SELECT h.*,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY h.holder_name, h.bond_code
-                       ORDER BY h.report_period DESC
-                   ) AS rn
+        WITH t AS (
+            SELECT h.holder_name, h.bond_code, h.hold_amount
             FROM holders h
-            WHERE h.is_natural = 0
+            WHERE h.is_natural = 0 AND h.report_period = ?
+        ),
+        hc AS (
+            SELECT holder_name, COUNT(*) AS hist_count
+            FROM holders WHERE is_natural = 0 GROUP BY holder_name
         )
-        SELECT l.holder_name,
-               COUNT(*)                        AS record_count,
-               COUNT(DISTINCT l.bond_code)     AS bond_count,
-               ROUND(SUM(l.hold_amount * COALESCE(b.current_price, 100.0)), 2) AS mv_wan
-        FROM latest l
-        LEFT JOIN bonds b ON l.bond_code = b.bond_code
-        WHERE l.rn = 1 AND COALESCE(b.is_delisted, 0) = 0
-        GROUP BY l.holder_name
-        ORDER BY mv_wan DESC, bond_count DESC, l.holder_name
+        SELECT t.holder_name,
+               hc.hist_count                   AS record_count,
+               COUNT(DISTINCT t.bond_code)     AS bond_count,
+               ROUND(SUM(t.hold_amount * COALESCE(b.current_price, 100.0)), 2) AS mv_wan
+        FROM t
+        JOIN hc ON hc.holder_name = t.holder_name
+        LEFT JOIN bonds b ON t.bond_code = b.bond_code
+        WHERE COALESCE(b.is_delisted, 0) = 0
+        GROUP BY t.holder_name
+        ORDER BY %s
         LIMIT ? OFFSET ?
-    """, (limit, offset))
+    """ % _holder_order_by(sort, order), (period, limit, offset))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
 
 
 def count_institutions():
+    """机构持有人数（统一最新期上榜、且持仓未退市）。"""
+    period = latest_report_period()
+    if not period:
+        return 0
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(DISTINCT holder_name) FROM holders WHERE is_natural = 0")
+    cur.execute("""
+        SELECT COUNT(DISTINCT h.holder_name)
+        FROM holders h
+        LEFT JOIN bonds b ON h.bond_code = b.bond_code
+        WHERE h.is_natural = 0 AND h.report_period = ?
+          AND COALESCE(b.is_delisted, 0) = 0
+    """, (period,))
     n = cur.fetchone()[0]
     conn.close()
     return n
@@ -866,19 +965,22 @@ def get_person_holdings(name):
         FROM holders h
         LEFT JOIN bonds b ON h.bond_code = b.bond_code
         WHERE h.holder_name = ?
-        ORDER BY h.bond_code, h.report_period DESC, h.rank
+        ORDER BY h.report_period DESC, h.rank, h.bond_code
     """, (name,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
 
 
-def get_person_latest_holdings(name):
+def get_person_latest_holdings(name, latest_only=False):
     """某自然人去重后的最新持仓汇总（每只转债只取最新报告期）。
+
+    参数 latest_only=True 时，只返回该持有人**最新报告期**（全表最大
+    report_period）那一批记录——即「当前持仓」，早年已清仓的老债不再混入。
 
     返回列表，每项含：bond_code, bond_name, stock_name, report_period,
     hold_amount(万张), current_price(元/张), periods_count(该转债出现期数),
-    mv_wan(该转债估算市值，万元)。
+    mv_wan(该转债估算市值，万元), is_latest_period。
     """
     conn = get_conn()
     cur = conn.cursor()
@@ -916,68 +1018,85 @@ def get_person_latest_holdings(name):
             "periods_count": sum(1 for x in rows if x["bond_code"] == code),
             "mv_wan": round(mv, 2),
         })
-    out.sort(key=lambda x: x["mv_wan"], reverse=True)
+    # 排序：报告期倒序（最新一期在最前面），同一期内再按估算市值降序
+    out.sort(key=lambda x: (x["report_period"] if x["report_period"] != "-" else "",
+                            x["mv_wan"]), reverse=True)
+    # 标记「最新报告期」：该持有人所有记录中的最大报告期所在的那一批
+    _latest_rp = out[0]["report_period"] if out and out[0]["report_period"] != "-" else ""
+    for x in out:
+        x["is_latest_period"] = bool(_latest_rp) and x["report_period"] == _latest_rp
+    if latest_only:
+        out = [x for x in out if x["is_latest_period"]]
     return out
 
 
 def get_person_market_value(name):
-    """某自然人去重后的估算市值（万元）及统计口径。
+    """某持有人在**最新一期报告期**的估算市值（万元）及统计口径。
 
-    关键：同一只转债可能出现在多个报告期，不能把各期持有量简单相加（否则
-    会重复计算市值，闹笑话）。口径与 get_natural_ranking 一致——
-    每个 (自然人, 转债) 仅取最新报告期持仓，市值 = 持有量(万张) × 现价(元/张)。
-    现价缺失按面值 100 元/张 估算。
+    口径与 /holder/<name> 详情页、榜单（get_natural_ranking /
+    get_all_natural_persons）完全一致：只统计该持有人最新一期报告期的上榜
+    持仓，已退市转债不计入，早年已清仓的老债不再累加。
+    市值 = 持有量(万张) × 现价(元/张)，现价缺失按面值 100 元/张 估算。
 
     返回 (mv_wan, bond_count, record_count)：
-      mv_wan      去重估算市值（万元，保留两位小数）
-      bond_count  涉及转债数（按 bond_code 去重）
-      record_count 持仓记录条数（跨报告期原始记录数）
+      mv_wan       最新一期估算市值（万元，保留两位小数）
+      bond_count   最新一期涉及转债数（按 bond_code 去重，不含已退市）
+      record_count 该持有人全库历史出现总次数
     """
-    holdings = get_person_latest_holdings(name)
-    mv = sum(h["mv_wan"] for h in holdings)
-    return round(mv, 2), len(holdings), sum(h["periods_count"] for h in holdings)
+    latest = get_person_latest_holdings(name, latest_only=True)
+    kept = [h for h in latest if not h.get("is_delisted")]
+    return round(sum(h["mv_wan"] for h in kept), 2), len(kept), len(get_person_holdings(name))
 
 
-def get_natural_ranking(limit=50):
-    """可转债牛散榜：自然人按持仓市值（估算）降序排列。
+def _holder_ranking(is_natural, limit=50):
+    """持有人市值榜（牛散榜 / 机构榜）统一实现。
 
-    市值估算口径：对每个（自然人, 转债）取最新报告期持仓，市值 = 持有量(万张) × 现价(元/张)
-    = 万元；现价缺失时按面值 100 元/张 估算。返回字段：
-      holder_name, mv_wan(估算市值,万元), bond_count(涉及转债数),
-      record_count(出现次数), top_bonds([{bond_name, mv_wan}...])
+    口径：**只统计统一最新期（latest_report_period）上榜的持有人** —— 所有人的
+    持仓都取自同一期，横向可比；早年已清仓的老债、以及最近一期未再上榜的人都
+    不计入。已退市转债同样不计入。
+    市值 = 持有量(万张) × 现价(元/张) = 万元；现价缺失按面值 100 元/张 估算。
+
+    返回字段：holder_name, mv_wan(估算市值,万元), bond_count(本期涉及转债数),
+    record_count(历史出现总次数), top_bonds([{bond_name, bond_code, mv_wan}...])
     """
+    period = latest_report_period()
+    if not period:
+        return []
+    nat = 1 if is_natural else 0
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT h.holder_name, h.bond_code, h.report_period, h.hold_amount,
-               b.bond_name, b.current_price, b.is_delisted
-        FROM holders h
-        LEFT JOIN bonds b ON h.bond_code = b.bond_code
-        WHERE h.is_natural = 1
-    """)
+        WITH t AS (
+            SELECT h.holder_name, h.bond_code, h.hold_amount
+            FROM holders h
+            WHERE h.is_natural = ? AND h.report_period = ?
+        ),
+        hc AS (
+            SELECT holder_name, COUNT(*) AS hist_count
+            FROM holders WHERE is_natural = ? GROUP BY holder_name
+        )
+        SELECT t.holder_name, t.bond_code, t.hold_amount, hc.hist_count,
+               b.bond_name, b.current_price
+        FROM t
+        JOIN hc ON hc.holder_name = t.holder_name
+        LEFT JOIN bonds b ON t.bond_code = b.bond_code
+        WHERE COALESCE(b.is_delisted, 0) = 0
+    """, (nat, period, nat))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
 
-    # 每个 (自然人, 转债) 仅保留最新报告期
-    best = {}
-    for r in rows:
-        key = (r["holder_name"], r["bond_code"])
-        if key not in best or r["report_period"] > best[key]["report_period"]:
-            best[key] = r
-
-    # 按自然人聚合
     agg = {}
-    for (name, _code), v in best.items():
-        # 已退市可转债不计入自然人持仓市值（与牛散榜口径一致）
-        if v.get("is_delisted"):
-            continue
+    for v in rows:
         price = v["current_price"] if v["current_price"] else 100.0
         mv = (v["hold_amount"] or 0) * price  # 万元
-        a = agg.setdefault(name, {"holder_name": name, "mv_wan": 0.0,
-                                  "bonds": set(), "top": []})
+        a = agg.setdefault(v["holder_name"], {
+            "holder_name": v["holder_name"],
+            "record_count": v["hist_count"], "mv_wan": 0.0,
+            "bonds": set(), "top": []})
         a["mv_wan"] += mv
         a["bonds"].add(v["bond_code"])
-        a["top"].append({"bond_name": v["bond_name"] or v["bond_code"], "bond_code": v["bond_code"], "mv_wan": mv})
+        a["top"].append({"bond_name": v["bond_name"] or v["bond_code"],
+                         "bond_code": v["bond_code"], "mv_wan": mv})
 
     result = []
     for name, a in agg.items():
@@ -986,63 +1105,24 @@ def get_natural_ranking(limit=50):
             "holder_name": name,
             "mv_wan": round(a["mv_wan"], 2),
             "bond_count": len(a["bonds"]),
-            "record_count": len(a["top"]),
+            "record_count": a["record_count"],
             "top_bonds": top,
         })
-    result.sort(key=lambda x: x["mv_wan"], reverse=True)
+    result.sort(key=lambda x: (x["mv_wan"], x["bond_count"]), reverse=True)
     return result[:limit]
+
+
+def get_natural_ranking(limit=50):
+    """可转债牛散榜：自然人按持仓市值（估算）降序排列（只看统一最新期上榜）。"""
+    return _holder_ranking(True, limit)
 
 
 def get_institution_ranking(limit=50):
     """可转债机构榜：机构（含基金 / 一般机构）按持仓市值（估算）降序排列。
 
-    市值估算口径与 get_natural_ranking 一致：每个（机构, 转债）仅取最新报告期
-    持仓，市值 = 持有量(万张) × 现价(元/张) = 万元；现价缺失按面值 100 元/张 估算。
-    返回字段：holder_name, mv_wan, bond_count, record_count, top_bonds。
+    与牛散榜同口径：只看统一最新期（latest_report_period）上榜的机构。
     """
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT h.holder_name, h.bond_code, h.report_period, h.hold_amount,
-               b.bond_name, b.current_price, b.is_delisted
-        FROM holders h
-        LEFT JOIN bonds b ON h.bond_code = b.bond_code
-        WHERE h.is_natural = 0
-    """)
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-
-    best = {}
-    for r in rows:
-        key = (r["holder_name"], r["bond_code"])
-        if key not in best or r["report_period"] > best[key]["report_period"]:
-            best[key] = r
-
-    agg = {}
-    for (name, _code), v in best.items():
-        # 已退市可转债不计入机构持仓市值
-        if v.get("is_delisted"):
-            continue
-        price = v["current_price"] if v["current_price"] else 100.0
-        mv = (v["hold_amount"] or 0) * price
-        a = agg.setdefault(name, {"holder_name": name, "mv_wan": 0.0,
-                                  "bonds": set(), "top": []})
-        a["mv_wan"] += mv
-        a["bonds"].add(v["bond_code"])
-        a["top"].append({"bond_name": v["bond_name"] or v["bond_code"], "bond_code": v["bond_code"], "mv_wan": mv})
-
-    result = []
-    for name, a in agg.items():
-        top = sorted(a["top"], key=lambda x: x["mv_wan"], reverse=True)[:3]
-        result.append({
-            "holder_name": name,
-            "mv_wan": round(a["mv_wan"], 2),
-            "bond_count": len(a["bonds"]),
-            "record_count": len(a["top"]),
-            "top_bonds": top,
-        })
-    result.sort(key=lambda x: x["mv_wan"], reverse=True)
-    return result[:limit]
+    return _holder_ranking(False, limit)
 
 
 # ---------------- 历史下修数据（集思录 adj_logs 采集） ----------------
@@ -2433,3 +2513,212 @@ def get_hist_low_map():
         rows = []
     conn.close()
     return {r[0]: r[1] for r in rows if r[1]}
+
+
+# ============ 多策略轮动（双低 / 小额债 / 低价债）============
+
+def _load_strategy_snapshots(code):
+    """载入某策略全部周快照：返回 (weeks 升序, {week_start: [row...]})。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    weeks = [r[0] for r in cur.execute(
+        "SELECT DISTINCT week_start FROM strategy_log WHERE strategy_code=? "
+        "ORDER BY week_start ASC", (code,)).fetchall()]
+    week_rows = {}
+    for ws in weeks:
+        week_rows[ws] = [dict(r) for r in cur.execute(
+            "SELECT rank, bond_code, bond_name, stock_name, rating, bond_price, "
+            "metric_value, premium_rate, remaining_scale, years_left FROM strategy_log "
+            "WHERE strategy_code=? AND week_start=? ORDER BY rank", (code, ws)).fetchall()]
+    conn.close()
+    return weeks, week_rows
+
+
+def save_strategy_snapshot(code, week_start, rows):
+    """幂等写入某策略某周的持仓快照（先删后插）。"""
+    now = _now_str()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM strategy_log WHERE strategy_code=? AND week_start=?",
+                (code, week_start))
+    for r in rows:
+        cur.execute("""
+            INSERT INTO strategy_log
+                (strategy_code, week_start, rank, bond_code, bond_name, stock_name,
+                 rating, bond_price, metric_value, premium_rate, remaining_scale,
+                 years_left, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (code, week_start, r.get("rank"), r.get("bond_code"), r.get("bond_name"),
+              r.get("stock_name"), r.get("rating"), r.get("bond_price"),
+              r.get("metric_value"), r.get("premium_rate"), r.get("remaining_scale"),
+              r.get("years_left"), now))
+    conn.commit()
+    conn.close()
+
+
+def get_strategy_weeks(code):
+    weeks, _ = _load_strategy_snapshots(code)
+    return weeks
+
+
+def get_strategy_latest_week(code):
+    weeks, _ = _load_strategy_snapshots(code)
+    return weeks[-1] if weeks else None
+
+
+def get_strategy_snapshot(code, week_start):
+    if not week_start:
+        return []
+    _, week_rows = _load_strategy_snapshots(code)
+    return week_rows.get(week_start, [])
+
+
+def get_strategy_latest_snapshot(code):
+    """{week_start, rows} 或 None。"""
+    weeks, week_rows = _load_strategy_snapshots(code)
+    if not weeks:
+        return None
+    return {"week_start": weeks[-1], "rows": week_rows[weeks[-1]]}
+
+
+def get_strategy_change(code):
+    """最新一周相对上一周的变动：{week_start, prev_week_start, entered, exited}。"""
+    weeks, week_rows = _load_strategy_snapshots(code)
+    if not weeks:
+        return None
+    latest = weeks[-1]
+    prev = weeks[-2] if len(weeks) > 1 else None
+    cur_rows = week_rows[latest]
+    prev_rows = week_rows[prev] if prev else []
+    cur_codes = {r["bond_code"] for r in cur_rows}
+    prev_codes = {r["bond_code"] for r in prev_rows}
+    return {
+        "week_start": latest,
+        "prev_week_start": prev,
+        "entered": [r for r in cur_rows if r["bond_code"] not in prev_codes],
+        "exited": [r for r in prev_rows if r["bond_code"] not in cur_codes],
+    }
+
+
+def get_strategy_holds(code):
+    """当前持仓（最新一周快照）+ 调入价 + 浮动收益。
+
+    调入价 = 首次进入周的周一真实收盘（缺则回退快照价）；现价 = 最新收盘。
+    """
+    weeks, week_rows = _load_strategy_snapshots(code)
+    if not weeks:
+        return []
+    first_seen, _ = _bond_entry_exit_map(weeks, week_rows)
+    latest_ws = weeks[-1]
+    cur_rows = week_rows[latest_ws]
+    closes = _load_closes_for_codes([r["bond_code"] for r in cur_rows])
+    out = []
+    for r in cur_rows:
+        bc = r["bond_code"]
+        ew, snap = first_seen.get(bc, (latest_ws, r["bond_price"]))
+        entry = _close_on_or_before(closes, bc, ew) or r["bond_price"] or snap
+        cur_px = _close_on_or_before(closes, bc, "2099-12-31") or r["bond_price"]
+        cur_date, _ = _close_pair_on_or_before(closes, bc, "2099-12-31")
+        ret = None
+        if entry and cur_px and entry > 0:
+            ret = (cur_px - entry) / entry * 100.0
+        out.append({**r, "entry_week": ew,
+                    "entry_price": round(entry, 2) if entry else None,
+                    "cur_price": round(cur_px, 2) if cur_px else None,
+                    "price_date": cur_date,
+                    "hold_return": round(ret, 2) if ret is not None else None})
+    return out
+
+
+def _summarize_holds(holds):
+    """等权（每只 UNIT_PER_BOND 元）持仓汇总：组合收益率、盈亏金额、胜负分布。"""
+    if not holds:
+        return None
+    pairs = [(r.get("hold_return"), r) for r in holds if r.get("hold_return") is not None]
+    if not pairs:
+        return None
+    n = len(pairs)
+    avg = sum(p[0] for p in pairs) / n
+    total_cost = UNIT_PER_BOND * n
+    total_mv = sum(UNIT_PER_BOND * (1 + p[0] / 100.0) for p in pairs)
+    win = sum(1 for p in pairs if p[0] > 0)
+    loss = sum(1 for p in pairs if p[0] < 0)
+    dates = [r.get("price_date") for _, r in pairs if r.get("price_date")]
+    best = max(pairs, key=lambda p: p[0])
+    worst = min(pairs, key=lambda p: p[0])
+    return {
+        "count": n,
+        "unit": UNIT_PER_BOND,
+        "avg_return": round(avg, 2),
+        "total_cost": round(total_cost, 2),
+        "total_mv": round(total_mv, 2),
+        "pnl": round(total_mv - total_cost, 2),
+        "win": win,
+        "loss": loss,
+        "flat": n - win - loss,
+        "as_of": max(dates) if dates else None,
+        "best": {"code": best[1]["bond_code"], "name": best[1]["bond_name"], "ret": best[0]},
+        "worst": {"code": worst[1]["bond_code"], "name": worst[1]["bond_name"], "ret": worst[0]},
+    }
+
+
+def get_strategy_summary(code, holds=None):
+    if holds is None:
+        holds = get_strategy_holds(code)
+    return _summarize_holds(holds)
+
+
+def get_strategy_nav_series(code, start=None):
+    """策略「持仓至今」的日度浮动收益率序列：[{date, ret}]（等权算术平均，%）。
+
+    以首次建仓周为起点，逐日计算：当前持仓每只债 (当日收盘 - 调入价)/调入价 的均值。
+    某日某债无价（停牌）则当日不计该债。用于多策略净值曲线对比。
+    """
+    weeks, week_rows = _load_strategy_snapshots(code)
+    if not weeks:
+        return []
+    first_ws = start or weeks[0]
+    latest_ws = weeks[-1]
+    first_seen, _ = _bond_entry_exit_map(weeks, week_rows)
+    holds = week_rows[latest_ws]
+    closes = _load_closes_for_codes([r["bond_code"] for r in holds])
+    entries = {}
+    for r in holds:
+        bc = r["bond_code"]
+        ew, snap = first_seen.get(bc, (latest_ws, r["bond_price"]))
+        p = _close_on_or_before(closes, bc, ew) or r["bond_price"] or snap
+        if p and p > 0:
+            entries[bc] = p
+    if not entries:
+        return []
+    dates = sorted({d for c in entries for (d, _) in closes.get(c, []) if d >= first_ws})
+    out = []
+    for d in dates:
+        rets = []
+        for c, p0 in entries.items():
+            px = _close_on_or_before(closes, c, d)
+            if px and px > 0:
+                rets.append((px - p0) / p0 * 100.0)
+        if rets:
+            out.append({"date": d, "ret": round(sum(rets) / len(rets), 3)})
+    return out
+
+
+def get_equal_weight_nav_series(start_date):
+    """可转债等权指数相对 start_date 的累计收益率序列 [{date, ret}]，作收益对比基准。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        rows = cur.execute(
+            "SELECT trade_date, index_value FROM equal_weight_index "
+            "WHERE trade_date >= ? AND index_value IS NOT NULL ORDER BY trade_date",
+            (start_date,)).fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    if not rows:
+        return []
+    base = rows[0][1]
+    if not base:
+        return []
+    return [{"date": d, "ret": round((v / base - 1) * 100.0, 3)} for d, v in rows]

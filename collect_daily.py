@@ -21,7 +21,9 @@
   6) mini_bond.ensure_columns()+refresh_all()  刷新小盘债候选（现价/赎回价/历史最高）写回 bonds
   7) checkup.refresh_remaining_scales()        剩余规模全量补全（主源集思录登录 cookie 经 bond_cb_jsl 拉全市场 ~500 只；
                                             未配置/失效 cookie 自动回退匿名 cb_list_new 前30活跃债，旧 crawler 保留；仅 UPDATE 有值项不置 NULL）
-  8) checkup.refresh_redeem_prices()        补全到期赎回价（东财全量基础解析写入 bonds.redeem_price）
+  8) checkup.refresh_redeem_prices()        补全到期赎回价 + 各年票息（东财全量基础解析写入
+                                            bonds.redeem_price / bonds.coupon_json；票息落库后
+                                            列表页/策略页才能离线按精确口径算到期收益率）
   9) checkup.refresh_transfer_prices()      回填当前转股价（akshare.bond_zh_cov_info 全市场遍历，修复东财 TRANSFER_PRICE=None/被初始价污染的债）
  10) crawler.collect_stock_finance()        正股财务指标（东财 F10 全量未退市债正股：总资产/总负债/有息负债率/总股本），
                                             供「全部转债」高级筛选的 资产负债率/有息负债率/转债占比 使用（7 天守卫，财务为季更）
@@ -226,6 +228,16 @@ def _step_rotate_double_low(force=False):
     return line
 
 
+def _step_rotate_strategies(force=False):
+    """多策略（双低 / 小额债 / 低价债）周一轮动。
+
+    与双低轮动同样的守卫：仅周一执行、本周已轮动则跳过（force 可绕过）。
+    三个策略共用同一候选池，便于横向对比收益。
+    """
+    import strategies as multi_strat
+    return multi_strat.rotate_all_monday(force=force)
+
+
 def _step_verify_integrity():
     """关键数据一致性校验（回归防护）：
 
@@ -292,11 +304,12 @@ def main():
         ("正股标签 stock_flags", _step_stock_flags),
         ("小盘债 mini_bond", lambda: (mini_bond.ensure_columns(), mini_bond.refresh_all())),
         ("剩余规模 remaining_scale", checkup.refresh_remaining_scales),
-        ("到期赎回价 redeem_price", checkup.refresh_redeem_prices),
+        ("到期赎回价+票息 em_basics", checkup.refresh_redeem_prices),
         ("当前转股价 transfer_price", checkup.refresh_transfer_prices),
         ("正股财务 stock_finance", lambda: _step_stock_finance(force)),
         ("等权指数 equal_weight_index", _step_equal_weight_index),
         ("双低轮动 rotate_double_low", lambda: _step_rotate_double_low(force)),
+        ("多策略轮动 rotate_strategies", lambda: _step_rotate_strategies(force)),
         ("一致性校验 verify_integrity", _step_verify_integrity),
     ]
     results = []
@@ -305,10 +318,10 @@ def main():
     r1, r2 = results[0], results[1]
 
     # 汇总判定：核心步骤（行情/基础/…/等权指数）成功 + 非阻塞步骤可失败。
-    # 一致性校验（第 13 步）失败仅记 warning，不影响 success/failed；它本身有退出码，
+    # 一致性校验（第 14 步）失败仅记 warning，不影响 success/failed；它本身有退出码，
     # 写 collect_steps 即可被管理后台看到。
-    core_results = results[:12]
-    verify_result = results[12]
+    core_results = results[:13]
+    verify_result = results[13]
     ok_all = all(core_results)
     if ok_all:
         final_status = "success"
@@ -317,9 +330,9 @@ def main():
     else:
         final_status = "failed"
     notes = ("行情=%s 基础=%s 退市检测=%s 停牌检测=%s 正股标签=%s 小盘=%s 剩余规模=%s 赎回价=%s "
-             "转股价=%s 财务=%s 等权指数=%s 双低轮动=%s 一致性=%s，总耗时 %.1fs" % (
+             "转股价=%s 财务=%s 等权指数=%s 双低轮动=%s 多策略轮动=%s 一致性=%s，总耗时 %.1fs" % (
         results[0], results[1], results[2], results[3], results[4], results[5], results[6],
-        results[7], results[8], results[9], results[10], results[11], results[12],
+        results[7], results[8], results[9], results[10], results[11], results[12], results[13],
         time.time() - t_all))
     if not verify_result:
         notes += " ⚠ 一致性校验失败：双低快照或等权指数回归，请查管理后台/管理后台/collect-logs"

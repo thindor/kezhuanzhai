@@ -15,19 +15,25 @@
   <section class="panel">
     <div class="panel-head">
       <h2>🧑 自然人持有人榜单</h2>
-      <span class="hint">共 <strong>{{ total }}</strong> 位自然人持有人（出现在可转债十大持有人中的个人）· 按持仓估算市值降序</span>
+      <span class="hint">共 <strong>{{ total }}</strong> 位自然人持有人 · <b>统一最新期 {{ holder_period }}</b> · 按{{ {'mv':'估算市值','bonds':'持有转债数','records':'出现次数'}[sort] }}{{ '降序' if order == 'desc' else '升序' }}</span>
     </div>
 
     {% if persons %}
-    <p class="hint" style="margin:0 0 10px">市值估算：每只转债取最新报告期持仓量 × 现价（现价缺失按面值 100 元/张），单位万元，仅供参考。</p>
+    <p class="hint" style="margin:0 0 10px">口径：<b>只统计统一最新期（{{ holder_period }}）上榜、且持仓未退市的自然人</b>——所有人的持仓取自同一期，横向可比；早年已清仓、或最近一期未再上榜的都不计入。市值 = 持有量(万张) × 现价(元/张)，现价缺失按面值 100 元/张，单位万元。「出现次数」为该自然人在全库的历史上榜总次数。</p>
+    <p class="sort-tip">点击表头可排序：持有转债数量 / 估算市值 / 出现次数（再次点击切换升/降序）</p>
+    {% macro sortth(col, label, default_order, cls='') %}
+      {% set cur = (sort == col) %}
+      {% set tgt = ('asc' if cur and order == 'desc' else ('desc' if cur and order == 'asc' else default_order)) %}
+      <th class="{{ cls }}"><a class="sort-h" href="?sort={{ col }}&amp;order={{ tgt }}&amp;page=1">{{ label }}{% if cur %}<span class="sort-ar">{{ '▼' if order == 'desc' else '▲' }}</span>{% endif %}</a></th>
+    {% endmacro %}
     <table class="rank">
       <thead>
         <tr>
           <th style="width:52px">#</th>
           <th>持有人</th>
-          <th>持有转债</th>
-          <th>估算市值(万元)</th>
-          <th>出现次数</th>
+          {{ sortth('bonds', '持有转债', 'desc') }}
+          {{ sortth('mv', '估算市值(万元)', 'desc') }}
+          {{ sortth('records', '出现次数', 'desc') }}
           <th style="text-align:right">操作</th>
         </tr>
       </thead>
@@ -50,10 +56,10 @@
   </section>
 
   <div class="pager">
-    {% if page > 1 %}<a href="{{ url_for('persons', page=page-1) }}">上一页</a>
+    {% if page > 1 %}<a href="{{ url_for('persons', page=page-1, sort=sort, order=order) }}">上一页</a>
     {% else %}<span class="disabled">上一页</span>{% endif %}
     <span>第 {{ page }} / {{ total_pages }} 页</span>
-    {% if page < total_pages %}<a href="{{ url_for('persons', page=page+1) }}">下一页</a>
+    {% if page < total_pages %}<a href="{{ url_for('persons', page=page+1, sort=sort, order=order) }}">下一页</a>
     {% else %}<span class="disabled">下一页</span>{% endif %}
   </div>
 </div>

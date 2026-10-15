@@ -149,10 +149,10 @@
 
   <div class="table-wrap">
     {% if rows %}
-    {% macro sortth(col, label, default_order, cls='') %}
+    {% macro sortth(col, label, default_order, cls='', tip='') %}
       {% set cur = (sort == col) %}
       {% set tgt = ('asc' if cur and order == 'desc' else ('desc' if cur and order == 'asc' else default_order)) %}
-      <th class="{{ cls }}"><a class="sort-h" href="?sort={{ col }}&amp;order={{ tgt }}&amp;code={{ code }}&amp;delisted={{ delisted }}&amp;has_down={{ has_down }}{% if down_min != '' %}&amp;down_min={{ down_min }}{% endif %}&amp;page=1">{{ label }}{% if cur %}<span class="sort-ar">{{ '▼' if order == 'desc' else '▲' }}</span>{% endif %}</a></th>
+      <th class="{{ cls }}"><a class="sort-h" href="?sort={{ col }}&amp;order={{ tgt }}&amp;code={{ code }}&amp;delisted={{ delisted }}&amp;has_down={{ has_down }}{% if down_min != '' %}&amp;down_min={{ down_min }}{% endif %}&amp;page=1"{% if tip %} title="{{ tip }}"{% endif %}>{{ label }}{% if cur %}<span class="sort-ar">{{ '▼' if order == 'desc' else '▲' }}</span>{% endif %}</a></th>
     {% endmacro %}
     <table class="rank">
       <thead>
@@ -163,10 +163,10 @@
           {{ sortth('conv', '转股价值', 'desc', 'num') }}
           {{ sortth('premium', '转股溢价率', 'desc', 'num') }}
           {{ sortth('redeem', '到期赎回价', 'desc', 'num') }}
+          {{ sortth('ytm', '到期收益率', 'desc', 'num', '含各年票息的精确现金流贴现：按最新现价买入并持有到期的年化收益率（%，税前，未扣利息税）。口径与体检卡、多策略页一致；已退市 / 停牌债不计算。⚠️ 剩余期限很短的临期债，年化后数值会被放大，需结合「到期时间」一起看。') }}
           {{ sortth('scale', '剩余规模', 'desc', 'num') }}
           {{ sortth('expire', '到期时间', 'asc') }}
           {{ sortth('down', '下修', 'desc') }}
-          <th>强赎预警</th>
           {{ sortth('holder', '持有人数', 'desc') }}
           <th>退市</th>
         </tr>
@@ -182,10 +182,10 @@
           <td class="num">{{ '%.2f'|format(b.conv_value) if b.conv_value is not none else '-' }}</td>
           <td class="num">{{ ('%.2f%%'|format(b.premium)) if b.premium is not none else '-' }}</td>
           <td class="num">{{ '%.2f'|format(b.redeem_price) if b.redeem_price else '-' }}</td>
+          <td class="num">{% if b.ytm is not none %}{{ '%.2f'|format(b.ytm) }}%{% else %}-{% endif %}</td>
           <td class="num">{% if b.remaining_scale_disp %}{{ '%.2f'|format(b.remaining_scale_disp) }}亿{% if b.remaining_scale_proxy %}<span class="approx">≈发行代理</span>{% endif %}{% else %}-{% endif %}</td>
           <td>{{ b.expire_date or '-' }}</td>
           <td>{% set dc = b.down_revise_count or 0 %}{% if dc > 0 %}<a class="down-badge" href="/xiuxie/{{ b.bond_code }}">{{ dc }} 次</a>{% else %}-{% endif %}</td>
-          <td>{% if b.redemption_warn %}<a class="warn-badge {{ b.redemption_warn.level }}" href="/bond/{{ b.bond_code }}" title="近30交易日已有 {{ b.redemption_warn.satisfy_cnt }}/15 日正股价≥转股价130%，预计 {{ b.redemption_warn.remaining }} 个交易日内触发强赎">⚠ {{ b.redemption_warn.remaining }}日内触发</a>{% else %}-{% endif %}</td>
           <td>{{ b.holder_count }} 条</td>
           <td>{% if b.is_delisted %}<span class="delist-badge">已退市</span>{% else %}否{% endif %}</td>
         </tr>

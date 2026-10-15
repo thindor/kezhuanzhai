@@ -54,6 +54,8 @@ import db
 import crawler
 import checkup
 import mini_bond
+import strategies as multi_strat
+import backtest
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -411,7 +413,8 @@ def inject_bond_status():
 @app.route("/")
 def index():
     code = request.args.get("code", "").strip()
-    persons = get_all_natural_persons(limit=30, offset=0)
+    # 榜单口径基准期只查一次，避免三个函数各查一遍
+    holder_period = db.latest_report_period()
     ranking = get_natural_ranking(limit=10)
     inst_ranking = get_institution_ranking(limit=10)
     recent = get_recent_bonds(12)
@@ -420,9 +423,10 @@ def index():
     from db import get_equal_weight_latest, get_equal_weight_trend
     ew = get_equal_weight_latest()
     ew_trend = get_equal_weight_trend(days=365)
-    return render_template("index.html", code=code, persons=persons,
+    return render_template("index.html", code=code,
                            ranking=ranking, inst_ranking=inst_ranking, recent=recent,
-                           market=market, trend=trend, ew=ew, ew_trend=ew_trend)
+                           market=market, trend=trend, ew=ew, ew_trend=ew_trend,
+                           holder_period=holder_period)
 
 
 @app.route("/api/search")
@@ -526,6 +530,17 @@ def _periods_payload(code, periods):
 
 
 # ---------------- 自然人持有人聚合（服务端渲染，SEO） ----------------
+def _holder_sort_args():
+    """解析榜单排序参数（白名单校验，非法值回退默认「市值降序」）。"""
+    sort = request.args.get("sort", "mv")
+    if sort not in db.HOLDER_SORT_KEYS:
+        sort = "mv"
+    order = request.args.get("order", "desc")
+    if order not in ("asc", "desc"):
+        order = "desc"
+    return sort, order
+
+
 @app.route("/persons")
 def persons():
     try:
@@ -534,12 +549,16 @@ def persons():
         page = 1
     if page < 1:
         page = 1
+    sort, order = _holder_sort_args()
     page_size = 50
-    rows = get_all_natural_persons(limit=page_size, offset=(page - 1) * page_size)
+    rows = get_all_natural_persons(limit=page_size, offset=(page - 1) * page_size,
+                                   sort=sort, order=order)
     total = count_natural_persons()
     total_pages = (total + page_size - 1) // page_size
     return render_template("persons.html", persons=rows, page=page,
-                           total_pages=total_pages, total=total)
+                           total_pages=total_pages, total=total,
+                           sort=sort, order=order,
+                           holder_period=db.latest_report_period())
 
 
 def holder_view(name):
@@ -553,9 +572,15 @@ def holder_view(name):
         abort(404)
     # 该持有人是否自然人：全部记录 is_natural=1 才视为自然人，否则机构
     is_natural = all((h.get("is_natural") or 0) == 1 for h in holdings)
-    # 去重市值：每只转债仅取最新报告期持仓，避免跨期重复累加
-    mv_wan, bond_count, record_count = get_person_market_value(name)
-    latest = get_person_latest_holdings(name)
+    # 最新报告期（该持有人全部记录中的最大报告期）
+    latest_period = ""
+    for h in holdings:
+        rp = h.get("report_period") or ""
+        if rp > latest_period:
+            latest_period = rp
+    # 汇总口径 = 只取最新报告期（即「当前持仓」），早年已清仓的老债不再混入
+    latest = get_person_latest_holdings(name, latest_only=True)
+    record_count = len(holdings)  # 历史出现总次数（跨报告期原始记录数）
     # 已退市可转债不计入持有市值与持有只数（自然人与机构口径一致：均仅算未退市持仓）
     _excl = [h for h in latest if not h.get("is_delisted")]
     mv_wan = round(sum(h["mv_wan"] for h in _excl), 2)
@@ -563,10 +588,14 @@ def holder_view(name):
     # 附加每只转债的历史下修次数（供持仓汇总表展示，未采集则 None）
     for h in latest:
         h["down_revise_count"] = get_down_revise_count(h["bond_code"])
+    latest_count = len(latest)                       # 最新一期上榜只数（含已退市）
+    older_count = max(record_count - latest_count, 0)  # 更早报告期的记录数
     return render_template("holder.html", name=name, holdings=holdings,
                            is_natural=is_natural,
                            bond_count=bond_count, record_count=record_count,
-                           mv_wan=mv_wan, latest=latest)
+                           mv_wan=mv_wan, latest=latest,
+                           latest_period=latest_period, latest_count=latest_count,
+                           older_count=older_count)
 
 
 @app.route("/holder/<name>")
@@ -597,14 +626,15 @@ def bonds_list():
     if has_down not in ("all", "yes", "no"):
         has_down = "all"
     sort = request.args.get("sort", "code")
-    SORT_KEYS = ("code", "price", "conv", "premium", "redeem", "scale",
+    SORT_KEYS = ("code", "price", "conv", "premium", "redeem", "ytm", "scale",
                  "expire", "down", "updated", "holder")
     if sort not in SORT_KEYS:
         sort = "code"
     DEFAULT_ORDER = {
         "code": "asc", "expire": "asc", "updated": "desc",
         "price": "desc", "conv": "desc", "premium": "desc",
-        "redeem": "desc", "scale": "desc", "down": "desc", "holder": "desc",
+        "redeem": "desc", "ytm": "desc", "scale": "desc",
+        "down": "desc", "holder": "desc",
     }
     order = request.args.get("order", "")
     if order not in ("asc", "desc"):
@@ -687,6 +717,11 @@ def bonds_list():
             except (TypeError, ValueError):
                 pass
         b["years_left"] = checkup.years_left(b.get("expire_date"))
+        # 到期收益率（全站统一口径 checkup.ytm_of_bond：含各年票息的精确现金流贴现）
+        # 已退市（价格冻结）、停牌（价格是停牌前的、且买不到）都不算 YTM，
+        # 否则这类僵尸价会霸占收益榜前列，形成假信号。保持 None，排序自然落到末尾。
+        b["ytm"] = (None if (b.get("is_delisted") or b.get("is_suspended"))
+                    else checkup.ytm_of_bond(b))
         _hl = _hist_low_map.get(_code)
         b["is_hist_low"] = (b.get("current_price") is not None and _hl is not None
                             and float(b["current_price"]) <= float(_hl))
@@ -748,6 +783,7 @@ def bonds_list():
         "conv": lambda b: b.get("conv_value"),
         "premium": lambda b: b.get("premium"),
         "redeem": lambda b: float(b["redeem_price"]) if b.get("redeem_price") else None,
+        "ytm": lambda b: b.get("ytm"),
         "scale": _scale_num,
         "expire": lambda b: b.get("expire_date"),
         "down": lambda b: b.get("down_revise_count") or 0,
@@ -767,9 +803,10 @@ def bonds_list():
     start = (page - 1) * page_size
     rows = rows_sorted[start:start + page_size]
 
-    # 当前页：强赎预警 + 剩余规模展示字段
+    # 当前页：剩余规模展示字段
+    # （原「强赎预警」列已下线——名称列已带强赎徽章 bond_badges()，信息重复；
+    #   顺带省掉每页 50 次 compute_redemption_warning 查询）
     for b in rows:
-        b["redemption_warn"] = crawler.compute_redemption_warning(b["bond_code"])
         b["redeem_price"] = b.get("redeem_price") or None
         _rs = b.get("eff_remaining_scale")
         b["remaining_scale_disp"] = _rs
@@ -874,6 +911,54 @@ def down_revise_warnings():
                            total=len(rows), approaching=approaching, triggered=triggered)
 
 
+@app.route("/strategies")
+def strategies_page():
+    """多策略轮动对比页：双低 / 小额债 / 低价债，同池同权重同频率，横向比收益。
+
+    三个策略共用同一候选池（未退市/未停牌/未强赎/有成交价，不排除 ST 与银行）、
+    同样取 20 只、同样等权每只 1 万元、同样每周一轮动，唯一区别是排序规则。
+    """
+    items = []
+    for s in multi_strat.STRATEGIES:
+        code = s["code"]
+        # 首次访问自动生成一次建仓快照（后续由每日管道在周一统一轮动）
+        if db.get_strategy_latest_week(code) is None:
+            try:
+                multi_strat.rotate(code)
+            except Exception as e:
+                print("[strategies] 初始化 %s 失败：%s" % (code, e))
+        holds = db.get_strategy_holds(code)
+        weeks = db.get_strategy_weeks(code)
+        items.append({**s,
+                      "holds": holds,
+                      "summary": db.get_strategy_summary(code, holds),
+                      "change": db.get_strategy_change(code),
+                      "weeks": weeks,
+                      "start": weeks[0] if weeks else None,
+                      "week_start": weeks[-1] if weeks else None})
+
+    starts = [i["start"] for i in items if i.get("start")]
+    start = min(starts) if starts else None
+    chart = {"labels": [], "series": []}
+    if start:
+        bench = db.get_equal_weight_nav_series(start)
+        labels = [d["date"] for d in bench]
+        if not labels:  # 等权指数缺失时退回策略自身日期
+            labels = sorted({d["date"] for i in items
+                             for d in db.get_strategy_nav_series(i["code"], start)})
+        bench_map = {d["date"]: d["ret"] for d in bench}
+        colors = {"double_low": "#E24B4A", "small_size": "#378ADD", "low_price": "#1D9E75"}
+        series = [{"name": "可转债等权指数（基准）", "color": "#888780", "dash": True,
+                   "data": [bench_map.get(d) for d in labels]}]
+        for i in items:
+            m = {d["date"]: d["ret"] for d in db.get_strategy_nav_series(i["code"], start)}
+            series.append({"name": i["name"], "color": colors.get(i["code"], "#5F5E5A"),
+                           "dash": False, "data": [m.get(d) for d in labels]})
+        chart = {"labels": labels, "series": series}
+    return render_template("strategies.html", items=items, chart=chart, start=start,
+                           topn=multi_strat.TOPN)
+
+
 @app.route("/double-low")
 def double_low():
     """双低策略页面：当前持仓 20 只 + 累计收益 + 历史轮动记录（每期进入/调出与轮动收益）。"""
@@ -938,12 +1023,16 @@ def institutions():
         page = 1
     if page < 1:
         page = 1
+    sort, order = _holder_sort_args()
     page_size = 50
-    rows = get_all_institutions(limit=page_size, offset=(page - 1) * page_size)
+    rows = get_all_institutions(limit=page_size, offset=(page - 1) * page_size,
+                               sort=sort, order=order)
     total = count_institutions()
     total_pages = (total + page_size - 1) // page_size
     return render_template("institutions.html", persons=rows, page=page,
-                           total_pages=total_pages, total=total)
+                           total_pages=total_pages, total=total,
+                           sort=sort, order=order,
+                           holder_period=db.latest_report_period())
 
 
 @app.route("/bond/<code>")
@@ -1154,7 +1243,8 @@ def robots():
 @app.route("/sitemap.xml")
 def sitemap():
     base = request.host_url.rstrip("/")
-    urls = [base + "/", base + "/bonds", base + "/persons", base + "/institutions"]
+    urls = [base + "/", base + "/bonds", base + "/persons", base + "/institutions",
+            base + "/double-low", base + "/strategies", base + "/backtest"]
     for p in get_all_natural_persons(limit=5000, offset=0):
         urls.append(base + "/person/" + urllib.parse.quote(p["holder_name"]))
     for p in get_all_institutions(limit=5000, offset=0):
@@ -1718,6 +1808,92 @@ def api_bond_realtime(code):
     if not rt:
         return jsonify({"ok": False, "message": "未找到该转债"}), 404
     return jsonify({"ok": True, **rt})
+
+
+# ---------------- 策略回测 ----------------
+
+def _bt_slim(result):
+    """精简回测结果，减少传往前端的 JSON 体积（持仓用数组表示）。"""
+    if not result or not result.get("ok"):
+        return result
+    out = {k: v for k, v in result.items() if k != "periods"}
+    periods = []
+    for p in result["periods"]:
+        periods.append({
+            "date": p["date"], "next_date": p["next_date"], "holding": p["holding"],
+            "candidates": p["candidates"], "gross": p["gross"], "cost": p["cost"],
+            "ret": p["ret"], "nav": p["nav"], "n": p["n"],
+            "h": [[h["bond_code"], h["bond_name"], h["rank"], h["metric"], h["premium"],
+                   h["buy_price"], h["end_price"], h["ret"], 1 if h["kept"] else 0]
+                  for h in p["holdings"]],
+        })
+    out["periods"] = periods
+    return out
+
+
+@app.route("/backtest")
+def backtest_page():
+    """多因子轮动策略回测：选因子/轮动周期/持仓数/起止日期，生成各期数据与收益走势。"""
+    a = request.args
+    form = {
+        "factor": a.get("factor", "double_low"),
+        "order": a.get("order", ""),
+        "topn": a.get("topn", "20"),
+        "sell_topn": a.get("sell_topn", ""),
+        "rebalance": a.get("rebalance", "5"),
+        "start": a.get("start", backtest.DEFAULT_START),
+        "end": a.get("end", ""),
+        "fee": a.get("fee", "0.02"),
+        "min_price": a.get("min_price", ""),
+        "max_price": a.get("max_price", ""),
+        "min_rating": a.get("min_rating", ""),
+        "min_scale": a.get("min_scale", ""),
+        "max_scale": a.get("max_scale", ""),
+        "min_years": a.get("min_years", ""),
+        "exclude_st": a.get("exclude_st", "1"),
+        "exclude_bank": a.get("exclude_bank", "1"),
+    }
+
+    def _num(k):
+        v = form.get(k)
+        try:
+            return float(v) if v not in (None, "") else None
+        except (ValueError, TypeError):
+            return None
+
+    def _int(k, d):
+        try:
+            return int(float(form.get(k)))
+        except (ValueError, TypeError):
+            return d
+
+    result = None
+    try:
+        result = backtest.run_backtest(
+            factor=form["factor"],
+            order=(form["order"] or None),
+            topn=_int("topn", 20),
+            sell_topn=(_int("sell_topn", 0) or None),
+            rebalance=_int("rebalance", 5),
+            start=form["start"],
+            end=(form["end"] or None),
+            min_price=_num("min_price"),
+            max_price=_num("max_price"),
+            min_rating=(form["min_rating"] or None),
+            min_scale=_num("min_scale"),
+            max_scale=_num("max_scale"),
+            min_years=_num("min_years"),
+            exclude_st=(form["exclude_st"] == "1"),
+            exclude_bank=(form["exclude_bank"] == "1"),
+            fee=(_num("fee") or 0.0),
+        )
+    except Exception as e:      # 回测异常不能让整页 500
+        result = {"ok": False, "error": "回测执行出错：%s" % e}
+
+    bt_json = json.dumps(_bt_slim(result), ensure_ascii=False, separators=(",", ":"))
+    return render_template("backtest.html", result=result, factors=backtest.FACTORS,
+                           form=form, bt_json=Markup(bt_json),
+                           default_start=backtest.DEFAULT_START)
 
 
 if __name__ == "__main__":

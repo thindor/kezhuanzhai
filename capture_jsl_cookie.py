@@ -88,7 +88,13 @@ def main():
     try:
         with sync_playwright() as p:
             try:
-                browser = p.chromium.launch(headless=False, args=["--start-maximized"])
+                # 默认用 playwright 自带 Chromium；若设置 JSL_BROWSER_CHANNEL（如 chrome），
+                # 则复用本机已安装的浏览器（避免在无网络/下载慢环境下拉取 195MB 浏览器）。
+                channel = os.environ.get("JSL_BROWSER_CHANNEL") or None
+                launch_kwargs = {"headless": False, "args": ["--start-maximized"]}
+                if channel:
+                    launch_kwargs["channel"] = channel
+                browser = p.chromium.launch(**launch_kwargs)
             except Exception as e:
                 _write_status({
                     "running": False, "stage": "error",

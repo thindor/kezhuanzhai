@@ -49,15 +49,16 @@
   </div>
 
   <div class="stat-cards">
-    <div class="stat"><div class="num blue">{{ bond_count }}</div><div class="label">持有转债（只）</div></div>
+    <div class="stat"><div class="num blue">{{ bond_count }}</div><div class="label">当前持有（只）</div></div>
+    <div class="stat"><div class="num small" style="margin-top:7px">{{ latest_period or '-' }}</div><div class="label">最新报告期</div></div>
     <div class="stat"><div class="num">{{ record_count }}</div><div class="label">历史出现（次）</div></div>
     <div class="stat"><div class="num green">{{ '%.1f'|format(mv_wan) }}</div><div class="label">估算市值（万元）</div></div>
   </div>
 
   <section class="panel">
     <div class="section-head">
-      <h3>📊 去重后持仓汇总</h3>
-      <span class="hint">同一只转债跨多个报告期只取最新一期，不重复累加；市值 = 持有量(万张) × 现价(元/张)，现价缺失按 100 元计；已退市转债（标「已退市」）不计入合计市值与持有只数</span>
+      <h3>📊 最新报告期持仓（{{ latest_period or '-' }}）</h3>
+      <span class="hint"><b>只列最新报告期上榜的 {{ latest_count }} 只转债，即当前持仓</b>；更早报告期的 {{ older_count }} 条历史记录见下方「历史持仓明细」；市值 = 持有量(万张) × 现价(元/张)，现价缺失按 100 元计；已退市转债（标「已退市」）不计入合计市值与持有只数</span>
     </div>
     <div class="table-wrap">
       <table class="rank">
@@ -66,7 +67,6 @@
             <th>转债代码</th>
             <th>转债名称</th>
             <th>正股</th>
-            <th>最新报告期</th>
             <th>历史期数</th>
             <th>下修</th>
             <th>持有量(万张)</th>
@@ -80,7 +80,6 @@
             <td><a class="link" href="/?code={{ h.bond_code }}">{{ h.bond_code }}</a></td>
             <td><a class="nm" href="/?code={{ h.bond_code }}">{{ h.bond_name or '-' }}</a>{% if h.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}{{ redeem_badge(h.bond_code) }}</td>
             <td>{{ h.stock_name or '-' }}</td>
-            <td>{{ h.report_period or '-' }}</td>
             <td>{{ h.periods_count }} 期</td>
             <td>{% if h.down_revise_count %}<a class="down-badge" href="/bond/{{ h.bond_code }}">{{ h.down_revise_count }} 次</a>{% else %}-{% endif %}</td>
             <td>{{ h.hold_amount }}</td>
@@ -91,7 +90,7 @@
         </tbody>
         <tfoot>
           <tr>
-            <td colspan="8" style="text-align:right;font-weight:600">合计（去重后）</td>
+            <td colspan="7" style="text-align:right;font-weight:600">合计（{{ latest_period or '-' }} 未退市持仓）</td>
             <td class="mv" style="font-weight:700">{{ '%.1f'|format(mv_wan) }}</td>
           </tr>
         </tfoot>
@@ -102,7 +101,7 @@
   <section class="panel">
     <div class="section-head">
       <h3>📜 历史持仓明细</h3>
-      <span class="hint">该{{ '自然人' if is_natural else '机构' }}在各报告期上榜的原始记录，同一只转债可能出现多次</span>
+      <span class="hint"><b>按报告期倒序排列，最新一期在最前</b>；该{{ '自然人' if is_natural else '机构' }}在各报告期上榜的原始记录，同一只转债可能出现多次</span>
     </div>
     <div class="table-wrap">
       <table class="rank">
@@ -122,7 +121,8 @@
         <tbody>
         {% for h in holdings %}
           {% set ncls = {'基金':'fund','个人':'natural','一般机构':'org'}.get(h.holder_nature, 'unknown') %}
-          <tr class="{% if h.is_natural %}natural{% endif %}">
+          {% set pcls = 'period-latest' if h.report_period == latest_period else 'period-older' %}
+          <tr class="{{ pcls }}{% if h.is_natural %} natural{% endif %}">
             <td><a class="link" href="/?code={{ h.bond_code }}">{{ h.bond_code }}</a></td>
             <td><a class="nm" href="/?code={{ h.bond_code }}">{{ h.bond_name or '-' }}</a>{% if h.is_delisted %} <span class="delist-badge">已退市</span>{% endif %}{{ redeem_badge(h.bond_code) }}</td>
             <td>{{ h.stock_name or '-' }}</td>
